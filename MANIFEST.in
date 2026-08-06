@@ -3,12 +3,14 @@ include CHANGELOG.md
 include RELEASE_CHECKLIST.md
 include config.yaml
 include requirements.txt
+include requirements-lock.txt
 include requirements-dev.txt
 include requirements-release.txt
 include server.py
 include setup.sh
 recursive-include certs .gitkeep
 recursive-include deploy *.yaml *.service
+recursive-include docs *.md
 recursive-include tests *.py *.sh
 recursive-include web *.html
 include fairino-python-sdk-main/LICENSE

@@ -18,6 +18,9 @@ WebXR static files and the FAIRINO SDK are external runtime resources.
 - [x] source distribution and wheel build
 - [x] `twine check` for built artifacts
 - [x] release archive content and secret-exclusion inspection
+- [x] Korean field installation and commissioning manual
+- [x] offline Ubuntu 22.04 / Python 3.10 runtime wheelhouse
+- [x] field bundle contents and recursive SHA-256 verification
 
 ## Stable 0.2.0 blockers
 

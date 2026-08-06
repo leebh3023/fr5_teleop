@@ -41,5 +41,5 @@ fairino-python-sdk-main/**/*.exp
 # Local packaging output
 build/
 dist/
+release/
 *.egg-info/
-

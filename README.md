@@ -7,6 +7,8 @@ Meta Quest 3의 WebXR controller pose를 받아 Fairino FR5의 Cartesian servo t
 운영 배포 단위는 source distribution을 풀어 설치하는 native
 venv+systemd 구성이다. wheel은 Python service 코드만 제공하며 별도
 config, WebXR static files와 Fairino SDK 경로가 필요하다.
+현장 release bundle의 `requirements-lock.txt`와 `wheelhouse/`는
+Ubuntu 22.04 / Python 3.10 x86-64 오프라인 설치에 사용한다.
 
 ## Architecture
 
@@ -34,6 +36,12 @@ Fairino SDK는 동기 호출과 내부 network thread를 사용하므로 별도 
 
 ```bash
 ./setup.sh
+```
+
+PC에 network interface가 여러 개이면 Quest가 접근할 주소를 명시한다.
+
+```bash
+TELEOP_HOST_IP=192.168.1.50 ./setup.sh
 ```
 
 수동 설치:
@@ -160,3 +168,4 @@ sudo systemctl enable --now vr-teleop
 `/etc/vr-teleop/tls`에서 관리하고 저장소에 커밋하지 않는다.
 
 자세한 상태 머신, IPC, 안전 불변조건과 완료 기준은 `AGENTS.md`를 따른다.
+실제 장비 설치와 commissioning 절차는 `docs/FIELD_MANUAL_KO.md`를 따른다.

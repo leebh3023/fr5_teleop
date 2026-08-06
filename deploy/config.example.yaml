@@ -30,9 +30,11 @@ timing:
   graceful_shutdown_s: 2.0
 
 motion:
-  position_scale: 500.0
+  # Conservative commissioning defaults. Increase only after recorded testing.
+  position_scale: 100.0
   ema_alpha: 0.25
-  max_step_mm: 1.5
+  max_step_mm: 0.25
+  # Replace these with a measured base-frame envelope around the initial TCP.
   workspace:
     x: [-600.0, 600.0]
     y: [-600.0, 600.0]

@@ -13,6 +13,8 @@ release candidate로 표시한다.
 - `config.yaml` 기반 server, TLS, SDK, timing, motion 설정
 - 빠른 `ServoMoveStart/End` 전환에 대한 rate-limited `ERROR` 감시
 - unit, process, WebSocket integration과 server smoke test
+- 필드 엔지니어용 한글 설치·Quest 3 연결·commissioning 매뉴얼과
+  오프라인 dependency wheelhouse를 포함하는 전달용 release bundle
 
 ### Changed
 

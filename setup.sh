@@ -23,7 +23,7 @@ python3 -m venv "${VENV_DIR}"
 
 echo "[2/4] Preparing local TLS certificate"
 mkdir -p "${CERT_DIR}"
-LOCAL_IP="$(hostname -I | awk '{print $1}')"
+LOCAL_IP="${TELEOP_HOST_IP:-$(hostname -I | awk '{print $1}')}"
 if [[ ! -f "${CERT_DIR}/cert.pem" || ! -f "${CERT_DIR}/key.pem" ]]; then
     if [[ -z "${LOCAL_IP}" ]]; then
         echo "Unable to determine a local IPv4 address." >&2
@@ -54,4 +54,5 @@ echo "Setup complete."
 echo "Dry-run: ${VENV_DIR}/bin/python -m teleop"
 echo "Config: ${SCRIPT_DIR}/config.yaml"
 echo "Quest URL: https://${LOCAL_IP}:8443"
+echo "Set TELEOP_HOST_IP before setup when Quest uses a different network interface."
 echo "Hardware mode always requires --confirm-hardware, including when enabled in YAML."

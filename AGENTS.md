@@ -71,6 +71,12 @@ Python worker는 일반 thread가 아니라 process로 둔다. 첨부 SDK의 여
 - `pyproject.toml`, `requirements*.txt`: Python 3.10과 고정 의존성
 - `CHANGELOG.md`, `RELEASE_CHECKLIST.md`: `0.2.0rc1` 변경 이력과
   stable release 전 수동 검증 gate
+- `docs/FIELD_MANUAL_KO.md`: FR5/Quest 3 현장 설치, TLS, 저속
+  commissioning, 장애 대응 한글 매뉴얼
+- `requirements-lock.txt`: Ubuntu 22.04 / Python 3.10 x86-64 field
+  bundle의 전체 runtime dependency lock
+- `release/`: 매뉴얼, wheelhouse, sdist/wheel과 SHA-256을 담는 로컬
+  전달 디렉터리이며 생성물이라 Git에는 포함하지 않음
 - `main.py` PyCharm 샘플은 제거됨
 - Git `main` branch의 기준선 첫 커밋은 `9b85763`임
 
