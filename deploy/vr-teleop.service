@@ -1,0 +1,22 @@
+[Unit]
+Description=Quest WebXR to Fairino FR5 teleop bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vr-teleop
+Group=vr-teleop
+WorkingDirectory=/opt/vr-teleop
+ExecStart=/opt/vr-teleop/.venv-linux/bin/python -m teleop --host 0.0.0.0 --port 8443 --cert /etc/vr-teleop/tls/cert.pem --key /etc/vr-teleop/tls/key.pem
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

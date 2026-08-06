@@ -1,36 +1,56 @@
-#!/bin/bash
-# VR Teleop 환경 설정 스크립트
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CERT_DIR="$SCRIPT_DIR/certs"
+VENV_DIR="${SCRIPT_DIR}/.venv-linux"
+CERT_DIR="${SCRIPT_DIR}/certs"
 
-echo "=== VR Teleop for FR5 Setup ==="
-
-# 1. SSL 인증서 생성 (WebXR은 HTTPS 필수)
-if [ ! -f "$CERT_DIR/cert.pem" ]; then
-    echo "[1/2] SSL 자체 서명 인증서 생성 중..."
-    # PC의 IP를 SAN에 포함 (Quest 브라우저 호환)
-    LOCAL_IP=$(hostname -I | awk '{print $1}')
-    openssl req -x509 -newkey rsa:2048 \
-        -keyout "$CERT_DIR/key.pem" \
-        -out "$CERT_DIR/cert.pem" \
-        -days 365 -nodes \
-        -subj "/CN=$LOCAL_IP" \
-        -addext "subjectAltName=IP:$LOCAL_IP,IP:127.0.0.1" \
-        2>/dev/null
-    echo "    인증서 생성 완료: $CERT_DIR/"
-    echo "    PC IP: $LOCAL_IP"
-else
-    echo "[1/2] SSL 인증서 이미 존재합니다."
+if [[ "$(uname -s)" != "Linux" ]]; then
+    echo "This setup script targets Ubuntu 22.04." >&2
+    exit 1
 fi
 
-# 2. Python 패키지 설치
-echo "[2/2] Python 패키지 설치 중..."
-pip install -r "$SCRIPT_DIR/requirements.txt" -q
+if ! python3 -c 'import sys; raise SystemExit(sys.version_info[:2] != (3, 10))'; then
+    echo "Python 3.10 is required for the bundled Fairino SDK." >&2
+    exit 1
+fi
 
-echo ""
-echo "=== 설정 완료 ==="
-LOCAL_IP=$(hostname -I | awk '{print $1}')
-echo "서버 시작: python $SCRIPT_DIR/server.py"
-echo "Quest 3에서 접속: https://$LOCAL_IP:8443"
+echo "[1/4] Creating Python 3.10 virtual environment"
+python3 -m venv "${VENV_DIR}"
+"${VENV_DIR}/bin/python" -m pip install --upgrade pip
+"${VENV_DIR}/bin/python" -m pip install -r "${SCRIPT_DIR}/requirements-dev.txt"
+"${VENV_DIR}/bin/python" -m pip install --no-deps -e "${SCRIPT_DIR}"
+
+echo "[2/4] Preparing local TLS certificate"
+mkdir -p "${CERT_DIR}"
+LOCAL_IP="$(hostname -I | awk '{print $1}')"
+if [[ ! -f "${CERT_DIR}/cert.pem" || ! -f "${CERT_DIR}/key.pem" ]]; then
+    if [[ -z "${LOCAL_IP}" ]]; then
+        echo "Unable to determine a local IPv4 address." >&2
+        exit 1
+    fi
+    openssl req -x509 -newkey rsa:2048 \
+        -keyout "${CERT_DIR}/key.pem" \
+        -out "${CERT_DIR}/cert.pem" \
+        -days 365 -nodes \
+        -subj "/CN=${LOCAL_IP}" \
+        -addext "subjectAltName=IP:${LOCAL_IP},IP:127.0.0.1"
+    chmod 600 "${CERT_DIR}/key.pem"
+elif ! openssl x509 -in "${CERT_DIR}/cert.pem" -noout -ext subjectAltName \
+    | grep -Fq "IP Address:${LOCAL_IP}"; then
+    echo "WARNING: existing certificate does not cover ${LOCAL_IP}." >&2
+    echo "Remove certs/cert.pem and certs/key.pem to regenerate it for this host." >&2
+fi
+
+echo "[3/4] Running non-hardware tests"
+"${VENV_DIR}/bin/python" -m pytest
+
+echo "[4/4] Running dry-run server smoke test"
+TELEOP_PYTHON="${VENV_DIR}/bin/python" \
+    bash "${SCRIPT_DIR}/tests/smoke/run_server_smoke.sh"
+
+echo
+echo "Setup complete."
+echo "Dry-run: ${VENV_DIR}/bin/python -m teleop"
+echo "Quest URL: https://${LOCAL_IP}:8443"
+echo "Real robot mode always requires both --robot and --confirm-hardware."

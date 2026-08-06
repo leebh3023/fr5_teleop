@@ -154,6 +154,11 @@
 // ──────────────────────────────────────────
 let ws = null;
 let wsConnected = false;
+let sessionId = null;
+let controllerOwned = false;
+let poseSeq = 0;
+let poseDropCount = 0;
+const MAX_BUFFERED_BYTES = 64 * 1024;
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -163,23 +168,45 @@ function connectWS() {
   ws.onopen = () => {
     wsConnected = true;
     document.getElementById('dot-ws').className = 'dot green';
-    document.getElementById('ws-status').textContent = '연결됨';
+    document.getElementById('ws-status').textContent = '협상 중';
     console.log('WebSocket 연결됨');
+    refreshVRButton();
   };
 
   ws.onmessage = (e) => {
     try {
       const data = JSON.parse(e.data);
-      if (data.type === 'status') {
+      if (data.type === 'hello') {
+        sessionId = data.session_id;
+        poseSeq = 0;
+        controllerOwned = false;
+        document.getElementById('ws-status').textContent = '연결됨';
+        if (xrSession) {
+          sendEvent('webxr_started');
+        }
+        refreshVRButton();
+      } else if (data.type === 'control') {
+        controllerOwned = data.granted === true;
+        if (!controllerOwned) {
+          document.getElementById('track-status').textContent = '다른 controller 사용 중';
+        }
+      } else if (data.type === 'status') {
         updateStatusUI(data);
+      } else if (data.type === 'error') {
+        console.warn('Protocol error:', data.message);
       }
-    } catch(err) {}
+    } catch(err) {
+      console.warn('Invalid server message:', err);
+    }
   };
 
   ws.onclose = () => {
     wsConnected = false;
+    sessionId = null;
+    controllerOwned = false;
     document.getElementById('dot-ws').className = 'dot red';
     document.getElementById('ws-status').textContent = '끊김';
+    refreshVRButton();
     setTimeout(connectWS, 2000);
   };
 
@@ -188,16 +215,33 @@ function connectWS() {
   };
 }
 
-function sendPose(hand, pos, ori, grip, trigger) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+function sendEvent(event) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !sessionId) return;
   ws.send(JSON.stringify({
+    version: 1,
+    type: 'event',
+    session_id: sessionId,
+    event: event
+  }));
+}
+
+function sendPose(hand, pos, ori, grip, trigger) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !sessionId || !controllerOwned) return;
+  if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+    poseDropCount += 1;
+    return;
+  }
+  ws.send(JSON.stringify({
+    version: 1,
     type: 'pose',
+    session_id: sessionId,
+    seq: poseSeq++,
+    client_time_ms: performance.now(),
     hand: hand,
-    position: [pos.x, pos.y, pos.z],
-    orientation: [ori.x, ori.y, ori.z, ori.w],
+    position_m: [pos.x, pos.y, pos.z],
+    orientation_xyzw: [ori.x, ori.y, ori.z, ori.w],
     grip: grip,
-    trigger: trigger,
-    timestamp: performance.now()
+    trigger: trigger
   }));
 }
 
@@ -205,11 +249,14 @@ function updateStatusUI(data) {
   const trackEl = document.getElementById('track-status');
   const cardCtrl = document.getElementById('card-ctrl');
 
-  if (data.tracking) {
+  if (data.state === 'FAULT') {
+    trackEl.textContent = `🔴 FAULT: ${data.fault || '알 수 없는 오류'}`;
+    cardCtrl.classList.remove('tracking-active');
+  } else if (data.tracking) {
     trackEl.textContent = '🟢 추적 중';
     cardCtrl.classList.add('tracking-active');
   } else {
-    trackEl.textContent = '대기';
+    trackEl.textContent = data.state || '대기';
     cardCtrl.classList.remove('tracking-active');
   }
 
@@ -218,7 +265,8 @@ function updateStatusUI(data) {
     document.getElementById('robot-pos').textContent =
       `${t[0].toFixed(1)}, ${t[1].toFixed(1)}, ${t[2].toFixed(1)}`;
   }
-  document.getElementById('frame-count').textContent = data.frame || 0;
+  document.getElementById('frame-count').textContent =
+    `${data.tick || 0} / drop ${poseDropCount}`;
 }
 
 // ──────────────────────────────────────────
@@ -227,22 +275,41 @@ function updateStatusUI(data) {
 let xrSession = null;
 let refSpace = null;
 let gl = null;
+let xrSupported = false;
+let xrCheckComplete = false;
 
 const btnVR = document.getElementById('btn-vr');
+btnVR.disabled = true;
+
+function refreshVRButton() {
+  const ready = xrSupported && wsConnected && sessionId && !xrSession;
+  btnVR.disabled = !ready;
+  if (!xrCheckComplete) {
+    btnVR.textContent = 'WebXR 확인 중';
+  } else if (!xrSupported) {
+    btnVR.textContent = '❌ WebXR 미지원 브라우저';
+  } else if (!wsConnected || !sessionId) {
+    btnVR.textContent = 'WebSocket 연결 대기';
+  } else if (!xrSession) {
+    btnVR.textContent = '🥽 VR 세션 시작';
+  }
+}
 
 // WebXR 지원 확인
 if (navigator.xr) {
   navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    xrCheckComplete = true;
     if (supported) {
+      xrSupported = true;
       btnVR.addEventListener('click', startVR);
+      refreshVRButton();
     } else {
-      btnVR.textContent = '❌ VR 미지원 기기';
-      btnVR.disabled = true;
+      refreshVRButton();
     }
   });
 } else {
-  btnVR.textContent = '❌ WebXR 미지원 브라우저';
-  btnVR.disabled = true;
+  xrCheckComplete = true;
+  refreshVRButton();
 }
 
 async function startVR() {
@@ -265,9 +332,7 @@ async function startVR() {
     btnVR.textContent = '🥽 VR 세션 활성';
     btnVR.disabled = true;
 
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'event', event: 'webxr_started' }));
-    }
+    sendEvent('webxr_started');
 
     refSpace = await xrSession.requestReferenceSpace('local-floor');
 
@@ -276,11 +341,9 @@ async function startVR() {
       document.getElementById('dot-xr').className = 'dot red';
       document.getElementById('xr-status').textContent = '종료됨';
       btnVR.textContent = '🥽 VR 세션 시작';
-      btnVR.disabled = false;
-
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'event', event: 'webxr_ended' }));
-      }
+      sendEvent('webxr_ended');
+      controllerOwned = false;
+      refreshVRButton();
     });
 
     xrSession.requestAnimationFrame(onXRFrame);

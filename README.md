@@ -1,0 +1,104 @@
+# VR Teleop Bridge for Fairino FR5
+
+Meta Quest 3의 WebXR controller pose를 받아 Fairino FR5의 Cartesian servo target으로 변환하는 Ubuntu 22.04용 teleoperation bridge다.
+
+## Architecture
+
+```text
+Quest WebXR (JavaScript)
+    -> HTTPS WebSocket
+Python aiohttp process
+    -> latest-pose shared mailbox + control IPC
+Python RobotWorker process
+    -> Fairino Python SDK
+FR5 controller
+```
+
+Fairino SDK는 동기 호출과 내부 network thread를 사용하므로 별도 process에 격리한다. 기본 실행은 실제 robot에 연결하지 않는 fake dry-run이다.
+
+## Requirements
+
+- Ubuntu 22.04 x86-64
+- Python 3.10
+- `python3.10-venv`
+- OpenSSL
+- Meta Quest가 접근할 수 있는 LAN
+
+## Setup
+
+```bash
+./setup.sh
+```
+
+수동 설치:
+
+```bash
+python3 -m venv .venv-linux
+source .venv-linux/bin/activate
+python -m pip install -r requirements-dev.txt
+python -m pip install --no-deps -e .
+python -m pytest
+```
+
+## Dry-run
+
+TLS를 사용하는 Quest 경로:
+
+```bash
+python -m teleop
+```
+
+localhost smoke test:
+
+```bash
+python -m teleop --no-tls --host 127.0.0.1
+```
+
+Health endpoints:
+
+```text
+GET /health/live
+GET /health/ready
+GET /ws
+```
+
+## Real robot
+
+실제 robot 모드는 명시적인 두 옵션을 모두 요구한다.
+
+```bash
+python -m teleop \
+  --robot 192.168.58.2 \
+  --confirm-hardware \
+  --sdk-path ./fairino-python-sdk-main/linux
+```
+
+실행 전 다음을 사람이 확인한다.
+
+- SDK와 controller firmware 호환성
+- 물리 E-stop
+- controller 통신 단절 정지 설정
+- 낮은 scale과 보수적인 workspace
+- robot 주변 안전과 observer
+
+vendor SDK의 `example/` 파일은 실제 motion command를 top-level에서 실행할 수 있으므로 자동 실행하지 않는다.
+
+## WSL
+
+WSL Ubuntu 22.04는 import, unit, process, WebSocket smoke test에 사용할 수 있다. `/mnt/c`에서 측정한 timing은 native Ubuntu 성능으로 해석하지 않으며 WSL에서 실제 robot motion test를 수행하지 않는다.
+
+## Deployment
+
+초기 운영 방식은 native virtualenv와 `systemd`다. 예제 unit은 dry-run으로 시작한다.
+
+```bash
+sudo install -d -o vr-teleop -g vr-teleop /opt/vr-teleop
+sudo install -d -o vr-teleop -g vr-teleop /etc/vr-teleop/tls
+sudo install -m 0644 deploy/vr-teleop.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now vr-teleop
+```
+
+인증서와 개인 키는 `/etc/vr-teleop/tls`에서 관리하고 저장소에 커밋하지 않는다.
+
+자세한 상태 머신, IPC, 안전 불변조건과 완료 기준은 `AGENTS.md`를 따른다.

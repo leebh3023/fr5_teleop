@@ -58,35 +58,50 @@ Python worker는 일반 thread가 아니라 process로 둔다. 첨부 SDK의 여
 
 ## 현재 저장소와 확인된 환경
 
-- `server.py`: 웹, 계산, 상태, SDK 호출이 한 파일에 결합된 현재 진입점
-- `web/index.html`: Quest WebXR UI와 WebSocket client
-- `setup.sh`: 인증서 생성과 패키지 설치를 의도한 초기 스크립트
+- `server.py`: `teleop.__main__`을 호출하는 얇은 호환 entry point
+- `teleop/`: protocol, 계산, aiohttp, IPC, robot adapter, worker/supervisor 구현
+- `web/index.html`: protocol v1, controller lease, backpressure를 사용하는 Quest WebXR UI
+- `tests/`: unit, process integration, WebSocket integration, server smoke test
+- `setup.sh`: Ubuntu 22.04 virtualenv, 고정 의존성, 테스트, dry-run smoke를 수행하는 설치 스크립트
 - `fairino-python-sdk-main/`: Windows/Linux SDK, 예제, build 산출물이 섞인 vendor tree
-- `certs/`: 현재 자체 서명 인증서와 개인 키가 존재
-- `main.py`: PyCharm 샘플이며 애플리케이션 진입점이 아님
-- 의존성 선언 파일과 프로젝트 테스트는 아직 없음
-- 현재 디렉터리는 Git 저장소로 초기화되어 있지 않음
+- `certs/`: 개발용 자체 서명 인증서가 로컬에 존재하지만 PEM은 Git ignore됨
+- `deploy/vr-teleop.service`: native Ubuntu systemd unit
+- `pyproject.toml`, `requirements*.txt`: Python 3.10과 고정 의존성
+- `main.py` PyCharm 샘플은 제거됨
+- Git `main` branch의 기준선 첫 커밋은 `9b85763`임
 
 Ubuntu 22.04 WSL smoke test에서 다음을 확인했다.
 
 - Ubuntu 22.04.5 LTS의 기본 Python은 3.10.12다.
 - `fairino-python-sdk-main/linux/fairino/Robot.py` import가 성공한다.
 - 포함된 native extension은 CPython 3.10, x86-64 ELF이며 `libc`에 링크된다.
-- `server.py`, `main.py`, `web/index.html`의 현재 Python/JavaScript 구문은 유효하다.
-- WSL Python에는 `numpy`, `pytest`가 있고 `aiohttp`는 없다.
+- `setup.sh`가 `.venv-linux`를 만들고 `aiohttp 3.12.15`, `pytest 8.4.1`과 package를 설치한다.
+- unit/process/WebSocket 통합 테스트 21개가 통과한다.
+- dry-run server가 ready/live/UI 응답 후 `RobotWorker`를 graceful하게 종료한다.
+- systemd unit 문법을 Ubuntu 22.04의 `systemd-analyze verify`로 확인했다.
 - Linux Node runtime은 설치되어 있지 않다.
 
 vendor SDK 소스가 보고하는 버전은 `SDK V2.2.7 / Robot V3.9.7`이지만 동봉 README는 V2.0.9까지만 기록한다. 예제와 구현의 `cmdType` 값도 서로 맞지 않는 부분이 있으므로 예제 코드를 API 계약으로 간주하지 않는다.
 
-현재 즉시 수정해야 하는 호환성 오류는 다음과 같다.
+기준선에서 발견된 다음 문제는 현재 구조에서 regression test 또는 adapter 경계로 처리한다.
 
-1. `server.py`는 프로젝트 상위의 Linux SDK를 찾지만 실제 SDK는 프로젝트 내부에 있다.
-2. 첨부 SDK의 `ServoCart()`는 필수 `exaxis` 인자를 요구하지만 현재 서버는 전달하지 않는다.
-3. `Robot.RPC()`는 연결 실패 시에도 객체를 반환할 수 있는데 현재 서버는 무조건 연결 성공으로 기록한다.
-4. SDK 오류 반환은 상황에 따라 정수 또는 tuple일 수 있는데 현재 코드는 tuple만 가정한다.
-5. 종료 시 `ServoMoveEnd()`만 호출하고 `CloseRPC()`와 SDK 내부 thread/socket lifecycle을 명시적으로 정리하지 않는다.
-6. `webxr_ended`는 로그로만 처리되어 마지막 pose가 `grip=true`였을 때 servo가 남을 수 있다.
-7. 현재 인증서 개인 키는 저장소 안에 있다. Git을 초기화하기 전에 외부 secret 경로로 옮기고 ignore 규칙을 추가해야 한다.
+1. Linux SDK 경로는 config/CLI에서 검증한다.
+2. `FairinoRobotClient`가 필수 `exaxis`를 전달한다.
+3. `Robot.RPC.is_connect`와 SDK query로 연결을 검증한다.
+4. SDK의 정수/tuple 혼합 반환을 `RobotClientError`로 정규화한다.
+5. worker 종료는 `ServoMoveEnd -> CloseRPC` 순서를 소유한다.
+6. `webxr_ended`, WebSocket EOF, stale pose가 control stop 경로로 연결된다.
+7. 인증서와 개인 키는 ignore되며 운영에서는 `/etc/vr-teleop/tls`에서 관리한다.
+
+아직 완료되지 않았거나 실제 장비에서 확인해야 하는 영역은 다음과 같다.
+
+- 실제 FR5 연결, SDK/firmware 호환성과 모든 초기화 반환 코드
+- controller 측 통신 단절 정지의 실제 사용 port와 정지 시간
+- native Ubuntu target에서의 10분 timing/soak와 p50/p95/p99 집계
+- 실제 systemd 설치, reboot start, stop timeout
+- Quest에서 TLS trust, WebXR session, controller mapping, 재연결 UX
+- 회전 teleop
+- TOML config loader와 장기 metric exporter
 
 SDK의 `example/` 파일은 테스트가 아니다. 실제 로봇을 즉시 움직이는 top-level 코드가 많으므로 agent는 이를 자동 실행하지 않는다.
 

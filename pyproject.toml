@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vr-teleop"
+version = "0.1.0"
+description = "Meta Quest WebXR to Fairino FR5 teleoperation bridge"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+    "aiohttp==3.12.15",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.4.1",
+    "pytest-asyncio==1.1.0",
+]
+
+[project.scripts]
+vr-teleop = "teleop.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["teleop*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"
