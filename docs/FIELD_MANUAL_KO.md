@@ -1,7 +1,7 @@
-# VR Teleop Bridge 0.2.0rc1 현장 설치·운용 매뉴얼
+# VR Teleop Bridge 0.2.0rc2 현장 설치·운용 매뉴얼
 
 대상 장비는 Meta Quest 3, FAIRINO FR5, Ubuntu 22.04 x86-64 PC다.
-이 문서는 릴리즈 후보 `0.2.0rc1`의 설치, dry-run 확인, 실제 로봇
+이 문서는 릴리즈 후보 `0.2.0rc2`의 설치, dry-run 확인, 실제 로봇
 commissioning과 종료 절차를 설명한다.
 
 > 경고: 이 프로그램의 grip과 pose timeout은 운용 보조 기능이며
@@ -17,8 +17,10 @@ commissioning과 종료 절차를 설명한다.
 - 컨트롤러 위치만 로봇 TCP 위치에 반영한다. 손목 회전과 trigger 입력은
   현재 로봇 제어에 사용하지 않는다.
 - 한 번에 WebXR client 한 대만 제어권을 갖는다.
-- 번들 SDK 표기는 Python SDK V2.0.9 / robot software V3.7.9다.
-  현장 controller firmware와의 호환성을 FAIRINO 담당자에게 확인한다.
+- vendor source의 보고 버전과 README 기록은 서로 다를 수 있다. 현장
+  controller firmware와 정확히 짝이 맞는 공식 SDK를 별도 준비해
+  `robot.sdk_path`로 지정한다. 확인된 조합은 Robot V3.7.8과 Python
+  SDK V2.0.8이며 이 조합은 legacy state socket 20004를 사용한다.
 - 프로그램의 실제 로봇 초기화는 `ResetAllError()`, 자동 모드 전환,
   drag mode 해제, robot enable을 순서대로 수행한다. 실제 로봇 모드로
   서버를 시작하는 순간 이 초기화가 실행된다.
@@ -30,8 +32,8 @@ commissioning과 종료 절차를 설명한다.
 | 파일 | 용도 |
 |---|---|
 | `README_FIRST_KO.md` | 이 현장 매뉴얼 |
-| `vr_teleop-0.2.0rc1.tar.gz` | Web UI, 설정, SDK와 테스트를 포함한 소스 배포본 |
-| `vr_teleop-0.2.0rc1-py3-none-any.whl` | Python service 패키지 |
+| `vr_teleop-0.2.0rc2.tar.gz` | Web UI, 설정, adapter와 테스트를 포함한 소스 배포본 |
+| `vr_teleop-0.2.0rc2-py3-none-any.whl` | Python service 패키지 |
 | `wheelhouse/` | Ubuntu 22.04 / Python 3.10 x86-64용 runtime dependency |
 | `requirements-lock.txt` | wheelhouse와 일치하는 전체 runtime dependency 버전 |
 | `SHA256SUMS` | 전달 파일 무결성 확인 |
@@ -47,7 +49,7 @@ commissioning과 종료 절차를 설명한다.
 - [ ] 감시자가 로봇 전체를 볼 수 있고 E-stop에 즉시 접근할 수 있다.
 - [ ] E-stop을 실제로 눌러 정지 상태가 되는지 확인했다.
 - [ ] 제어기에서 통신 단절 시 정지 설정을 확인했다.
-- [ ] controller firmware와 Python SDK V2.0.9 호환성을 확인했다.
+- [ ] controller firmware와 선택한 Python SDK의 정확한 조합을 확인했다.
 - [ ] 최초 workspace를 현재 TCP 주변의 작은 영역으로 계산했다.
 - [ ] Quest와 PC의 배터리·전원·네트워크가 안정적이다.
 - [ ] dry-run 절차를 먼저 완료했다.
@@ -101,11 +103,15 @@ sudo nmcli connection up "ROBOT-NIC"
 ```bash
 ping -c 3 192.168.58.2
 nc -vz -w 2 192.168.58.2 20003
+nc -vz -w 2 192.168.58.2 20004
 nc -vz -w 2 192.168.58.2 20005
 ```
 
-이 릴리즈의 SDK 연결 판정에는 XML-RPC `20003/TCP`와 CNDE
-`20005/TCP`가 모두 필요하다. 방화벽이나 VLAN에서 두 연결을 허용한다.
+XML-RPC `20003/TCP`는 공통이다. Robot V3.7.8/SDK V2.0.8은 realtime
+state `20004/TCP`를 사용하고, 신형 SDK는 CNDE `20005/TCP`를 사용할
+수 있다. 현장 firmware와 SDK 조합에 해당하는 state port만 열려 있어야
+하며, 20005가 거부된다는 이유로 다른 버전 SDK의 vendor 소스를
+자동 수정하지 않는다.
 
 ### 4.3 Quest 경로 확인
 
@@ -148,14 +154,14 @@ Python은 `3.10.x`, architecture는 `x86_64`여야 한다.
 아래 명령은 릴리즈 디렉터리에서 실행한다.
 
 ```bash
-tar -xzf vr_teleop-0.2.0rc1.tar.gz
+tar -xzf vr_teleop-0.2.0rc2.tar.gz
 
 sudo useradd --system --home /opt/vr-teleop \
   --shell /usr/sbin/nologin vr-teleop 2>/dev/null || true
 sudo install -d -o vr-teleop -g vr-teleop /opt/vr-teleop
-sudo cp -a vr_teleop-0.2.0rc1/. /opt/vr-teleop/
+sudo cp -a vr_teleop-0.2.0rc2/. /opt/vr-teleop/
 sudo cp -a wheelhouse /opt/vr-teleop/
-sudo cp vr_teleop-0.2.0rc1-py3-none-any.whl /opt/vr-teleop/
+sudo cp vr_teleop-0.2.0rc2-py3-none-any.whl /opt/vr-teleop/
 sudo chown -R vr-teleop:vr-teleop /opt/vr-teleop
 
 sudo -u vr-teleop python3 -m venv /opt/vr-teleop/.venv-linux
@@ -164,13 +170,32 @@ sudo -u vr-teleop /opt/vr-teleop/.venv-linux/bin/python -m pip install \
   -r /opt/vr-teleop/requirements-lock.txt
 sudo -u vr-teleop /opt/vr-teleop/.venv-linux/bin/python -m pip install \
   --no-index --no-deps \
-  /opt/vr-teleop/vr_teleop-0.2.0rc1-py3-none-any.whl
+  /opt/vr-teleop/vr_teleop-0.2.0rc2-py3-none-any.whl
 ```
 
 wheelhouse가 없는 개발용 배포본에서는 인터넷 연결 후
 `python -m pip install -r requirements.txt`를 사용한다.
 
-## 6. TLS 인증서
+## 6. firmware와 일치하는 FAIRINO SDK 설치
+
+릴리즈에는 특정 firmware용 SDK를 넣지 않는다. FAIRINO에서 받은 공식
+SDK 중 controller firmware와 정확히 일치하는 버전을 별도 디렉터리에
+배치한다. Robot V3.7.8 현장 확인 조합의 예:
+
+```bash
+sudo install -d -o root -g vr-teleop /opt/fairino-sdk-2.0.8_robot3.7.8
+sudo cp -a /media/field/SDK-2.0.8/linux \
+  /opt/fairino-sdk-2.0.8_robot3.7.8/
+sudo find /opt/fairino-sdk-2.0.8_robot3.7.8 -type d -exec chmod 0755 {} \;
+sudo find /opt/fairino-sdk-2.0.8_robot3.7.8 -type f -exec chmod 0644 {} \;
+test -f \
+  /opt/fairino-sdk-2.0.8_robot3.7.8/linux/fairino/Robot.py
+```
+
+SDK example 파일은 실행하지 않는다. `Robot.py`를 다른 SDK의 통신
+방식으로 patch하지 않고 adapter의 `sdk_path`만 바꾼다.
+
+## 7. TLS 인증서
 
 WebXR은 secure context가 필요하므로 Quest용 접속은 HTTPS/WSS를
 사용한다. 인증서의 SAN에는 Quest가 접속할 Ubuntu PC의 IP 또는 DNS
@@ -211,7 +236,7 @@ sudo chmod 0640 /etc/vr-teleop/tls/key.pem
 이 자체 서명 인증서는 현장 CA 신뢰 설정 없이 운영용으로 사용하지
 않는다.
 
-## 7. 설정 파일
+## 8. 설정 파일
 
 ```bash
 sudo install -d -m 0750 -o root -g vr-teleop /etc/vr-teleop
@@ -233,7 +258,7 @@ sudoedit /etc/vr-teleop/config.yaml
 | `server.allowed_origins` | 허용 Web origin | 운영 URL 하나로 제한 |
 | `tls.cert_path`, `key_path` | 인증서와 개인 키 | `/etc/vr-teleop/tls/...` |
 | `robot.ip` | FR5 controller 주소 | 현장 확인값 |
-| `robot.sdk_path` | Linux SDK 디렉터리 | `/opt/vr-teleop/fairino-python-sdk-main/linux` |
+| `robot.sdk_path` | firmware 일치 Linux SDK | 현장 SDK 절대 경로 |
 | `timing.pose_timeout_s` | pose 무수신 정지 시간 | `0.100` 유지 |
 | `motion.position_scale` | VR 1 m당 로봇 이동 mm | 최초 `100.0` |
 | `motion.max_step_mm` | 8 ms tick당 최대 이동 | 최초 `0.25` |
@@ -262,7 +287,7 @@ tls:
 
 robot:
   ip: 192.168.58.2
-  sdk_path: /opt/vr-teleop/fairino-python-sdk-main/linux
+  sdk_path: /opt/fairino-sdk-2.0.8_robot3.7.8/linux
   exaxis_default: [0.0, 0.0, 0.0, 0.0]
 
 timing:
@@ -299,9 +324,9 @@ Robot Z = +VR Y
 `position_scale: 100`이면 손을 10 cm 움직였을 때 목표 TCP 변화는
 10 mm다.
 
-## 8. dry-run 시운전
+## 9. dry-run 시운전
 
-### 8.1 foreground 실행
+### 9.1 foreground 실행
 
 ```bash
 sudo -u vr-teleop /opt/vr-teleop/.venv-linux/bin/python -m teleop \
@@ -318,7 +343,7 @@ curl -k https://127.0.0.1:8443/health/ready
 응답의 `live`, `ready`가 `true`여야 한다. `Ctrl+C`로 종료하고 worker
 shutdown 로그를 확인한다.
 
-### 8.2 Quest 3 연결
+### 9.2 Quest 3 연결
 
 1. Quest 3을 Quest용 LAN/AP에 연결한다.
 2. Quest Browser에서 `https://<Ubuntu Quest NIC 주소>:8443/`를 연다.
@@ -333,9 +358,9 @@ shutdown 로그를 확인한다.
 
 dry-run에서 이 절차가 실패하면 실제 로봇 모드로 전환하지 않는다.
 
-## 9. 실제 FR5 최초 시험
+## 10. 실제 FR5 최초 시험
 
-### 9.1 시작 직전
+### 10.1 시작 직전
 
 1. 로봇을 충돌 위험이 없는 자세에 둔다.
 2. 감시자가 E-stop을 잡는다.
@@ -344,7 +369,7 @@ dry-run에서 이 절차가 실패하면 실제 로봇 모드로 전환하지 �
    경로, 저속 scale, step과 실제 workspace를 다시 읽어 확인한다.
 5. `runtime.dry_run: false`를 설정한다.
 
-### 9.2 foreground hardware 실행
+### 10.2 foreground hardware 실행
 
 최초 시험은 systemd가 아니라 터미널 foreground에서 한다.
 
@@ -361,7 +386,7 @@ sudo -u vr-teleop /opt/vr-teleop/.venv-linux/bin/python -m teleop \
 - worker `IDLE` 또는 health ready
 - SDK/controller version
 
-### 9.3 최소 이동 시험
+### 10.3 최소 이동 시험
 
 1. Quest에서 VR 세션을 시작하되 grip을 누르지 않는다.
 2. UI 상태와 로봇 정지 상태를 확인한다.
@@ -379,7 +404,7 @@ sudo -u vr-teleop /opt/vr-teleop/.venv-linux/bin/python -m teleop \
 방향이 다르거나 예상보다 크게 움직이면 즉시 grip을 놓고 E-stop을
 준비한 상태에서 서버를 종료한다. scale을 올려 문제를 덮지 않는다.
 
-## 10. systemd 운영
+## 11. systemd 운영
 
 dry-run service부터 설치한다.
 
@@ -415,7 +440,7 @@ sudo systemctl restart vr-teleop
 sudo journalctl -u vr-teleop -n 100 --no-pager
 ```
 
-## 11. 정상 상태와 정지 의미
+## 12. 정상 상태와 정지 의미
 
 | 상태 | 의미 | 현장 조치 |
 |---|---|---|
@@ -433,7 +458,7 @@ sudo journalctl -u vr-teleop -n 100 --no-pager
 WebSocket pose가 오면 가장 최신 pose만 사용하며 과거 pose를 재생하지
 않는다.
 
-## 12. 장애 및 비상 대응
+## 13. 장애 및 비상 대응
 
 ### 로봇이 예상하지 않은 방향/속도로 움직임
 
@@ -471,13 +496,14 @@ WebSocket pose가 오면 가장 최신 pose만 사용하며 과거 pose를 재�
 
 ### FR5 연결 실패
 
-- `ping`, `20003/TCP`, `20005/TCP`를 다시 확인한다.
+- `ping`, `20003/TCP`와 firmware에 맞는 `20004/TCP` 또는
+  `20005/TCP`를 다시 확인한다.
 - PC route가 올바른 robot NIC로 향하는지 `ip route get <robot-ip>`로
   확인한다.
 - 다른 프로그램이 동시에 controller를 제어하지 않는지 확인한다.
 - SDK/controller version 조합을 확인한다.
 
-## 13. 로그 수집
+## 14. 로그 수집
 
 systemd 운용:
 
@@ -498,7 +524,7 @@ sudo journalctl -u vr-teleop --since "10 minutes ago" \
 
 pose 원본을 매 frame 수집하거나 외부에 공개하지 않는다.
 
-## 14. 종료와 rollback
+## 15. 종료와 rollback
 
 정상 종료:
 
@@ -512,7 +538,7 @@ sudo journalctl -u vr-teleop -n 50 --no-pager
 `/opt/vr-teleop`을 교체한다. 개인 키와 현장별 config는 백업하되 릴리즈
 아카이브나 Git에 넣지 않는다.
 
-## 15. 공식 참고 자료
+## 16. 공식 참고 자료
 
 - FAIRINO Python SDK 기본/RPC:
   <https://fairino-doc-en.readthedocs.io/3.6.7/SDKManual/PythonRobotBase.html>

@@ -3,6 +3,32 @@
 이 프로젝트는 Semantic Versioning을 따르며, 실제 로봇 검증 전 빌드는
 release candidate로 표시한다.
 
+## [0.2.0rc2] - 2026-08-06
+
+### Fixed
+
+- 한 worker tick 안에 `grip=false -> true` pose가 연속 도착할 때
+  overwrite-only mailbox가 release edge를 지워 재무장되지 않던 문제
+- Quest grip analog 값에 hysteresis를 적용해 button threshold 부근의
+  press/release 채터링 완화
+- SDK V2.0.8의 `is_conect` 연결 flag와 `exaxis` 없는 legacy
+  `ServoCart` signature 호환
+
+### Changed
+
+- pose는 최신 snapshot을 유지하고 grip transition만 비손실 control
+  pipe로 분리
+- status에 `rearm_required`를 추가하고 WebXR UI에
+  “grip을 완전히 놓았다 다시 누르세요” 안내 표시
+- firmware V3.7.8/SDK V2.0.8의 20004 state socket과 신형 SDK의
+  20005 CNDE 연결을 현장 매뉴얼에서 구분
+
+### Safety
+
+- vendor `Robot.py`에는 자동 fallback patch를 적용하지 않으며
+  controller firmware와 일치하는 공식 SDK를 `robot.sdk_path`로 선택
+- stale timeout 및 session loss 뒤 자동 ACTIVE 복귀를 허용하지 않음
+
 ## [0.2.0rc1] - 2026-08-06
 
 ### Added

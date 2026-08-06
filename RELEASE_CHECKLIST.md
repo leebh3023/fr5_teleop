@@ -1,4 +1,4 @@
-# Release checklist: 0.2.0rc1
+# Release checklist: 0.2.0rc2
 
 Production deployment uses the source distribution with native venv and
 systemd. The wheel contains the Python service package only; configuration,
@@ -13,7 +13,7 @@ WebXR static files and the FAIRINO SDK are external runtime resources.
 - [x] hardware mode requires `--confirm-hardware`
 - [x] TLS private keys and generated artifacts are Git-ignored
 - [x] FAIRINO `ServoCart` arguments match the documented defaults
-- [x] Ubuntu 22.04 WSL full test suite: 31 passed
+- [x] Ubuntu 22.04 WSL full test suite: 38 passed
 - [x] dry-run server smoke test
 - [x] source distribution and wheel build
 - [x] `twine check` for built artifacts
@@ -21,6 +21,9 @@ WebXR static files and the FAIRINO SDK are external runtime resources.
 - [x] Korean field installation and commissioning manual
 - [x] offline Ubuntu 22.04 / Python 3.10 runtime wheelhouse
 - [x] field bundle contents and recursive SHA-256 verification
+- [x] rapid grip release/press survives latest-pose overwrite
+- [x] stale timeout status exposes explicit rearm requirement
+- [x] SDK V2.0.8 legacy connection flag and ServoCart signature adapter tests
 
 ## Stable 0.2.0 blockers
 

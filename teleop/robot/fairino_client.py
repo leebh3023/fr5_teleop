@@ -22,6 +22,7 @@ class FairinoRobotClient:
         self.config = config
         self._robot_module: Any = None
         self._robot: Any = None
+        self._servo_cart_supports_exaxis: bool | None = None
 
     @staticmethod
     def _code(result: Any, operation: str) -> int:
@@ -44,6 +45,15 @@ class FairinoRobotClient:
         method = getattr(self._robot, operation)
         self._expect_zero(method(*args, **kwargs), operation)
 
+    @staticmethod
+    def _connection_state(rpc_type: Any) -> bool | None:
+        states = [
+            bool(getattr(rpc_type, name))
+            for name in ("is_connect", "is_conect")
+            if hasattr(rpc_type, name)
+        ]
+        return any(states) if states else None
+
     def connect(self) -> None:
         if platform.system() != "Linux":
             raise RobotClientError("connect", None, "Fairino target requires Linux")
@@ -61,14 +71,21 @@ class FairinoRobotClient:
 
         self._robot_module = importlib.import_module("fairino.Robot")
         self._robot = self._robot_module.RPC(self.config.robot_ip)
-        if not bool(getattr(self._robot_module.RPC, "is_connect", False)):
+        connection_state = self._connection_state(self._robot_module.RPC)
+        if connection_state is False:
             raise RobotClientError(
-                "connect", -4, "SDK did not establish both CNDE and XML-RPC links"
+                "connect",
+                -4,
+                "SDK connection flag is false (is_connect/is_conect)",
             )
 
         version_result = self._robot.GetSDKVersion()
         self._expect_zero(version_result, "GetSDKVersion")
         versions = version_result[1] if isinstance(version_result, tuple) else None
+        if connection_state is None:
+            log.warning(
+                "Fairino SDK exposes no connection flag; GetSDKVersion succeeded"
+            )
         log.info("Fairino connection ready: ip=%s versions=%s", self.config.robot_ip, versions)
 
     def initialize(self) -> None:
@@ -102,19 +119,38 @@ class FairinoRobotClient:
     def servo_cart(self, target: TcpPose) -> None:
         if self._robot is None:
             raise RobotClientError("ServoCart", None, "robot is not connected")
-        result = self._robot.ServoCart(
-            mode=0,
-            desc_pos=list(target),
-            exaxis=list(self.config.exaxis_default),
-            pos_gain=[1.0] * 6,
+        arguments = {
+            "mode": 0,
+            "desc_pos": list(target),
+            "pos_gain": [1.0] * 6,
             # FAIRINO marks these controls as unavailable and documents zero
             # as the supported default for Cartesian servo streaming.
-            acc=0.0,
-            vel=0.0,
-            cmdT=self.config.servo_period_s,
-            filterT=0.0,
-            gain=0.0,
-        )
+            "acc": 0.0,
+            "vel": 0.0,
+            "cmdT": self.config.servo_period_s,
+            "filterT": 0.0,
+            "gain": 0.0,
+        }
+        if self._servo_cart_supports_exaxis is not False:
+            try:
+                result = self._robot.ServoCart(
+                    **arguments,
+                    exaxis=list(self.config.exaxis_default),
+                )
+                self._servo_cart_supports_exaxis = True
+            except TypeError as exc:
+                if "unexpected keyword argument 'exaxis'" not in str(exc):
+                    raise RobotClientError(
+                        "ServoCart", None, f"SDK signature error: {exc}"
+                    ) from exc
+                self._servo_cart_supports_exaxis = False
+                log.warning(
+                    "Fairino SDK ServoCart has no exaxis parameter; "
+                    "using legacy signature"
+                )
+                result = self._robot.ServoCart(**arguments)
+        else:
+            result = self._robot.ServoCart(**arguments)
         self._expect_zero(result, "ServoCart")
 
     def servo_end(self) -> None:

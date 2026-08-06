@@ -17,7 +17,9 @@ tls:
 
 robot:
   ip: 192.168.58.2
-  sdk_path: /opt/vr-teleop/fairino-python-sdk-main/linux
+  # Use the official SDK matching the controller firmware.
+  # Example for Robot V3.7.8: /opt/fairino-sdk-2.0.8_robot3.7.8/linux
+  sdk_path: /opt/fairino-sdk/linux
   exaxis_default: [0.0, 0.0, 0.0, 0.0]
 
 timing:

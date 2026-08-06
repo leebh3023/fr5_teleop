@@ -52,6 +52,18 @@ def wait_for_state(
     )
 
 
+def wait_for_status(supervisor: RobotSupervisor, predicate, timeout: float = 3.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for status in supervisor.drain_status():
+            if predicate(status):
+                return status
+        time.sleep(0.01)
+    raise AssertionError(
+        f"worker did not reach expected status; latest={supervisor.latest_status}"
+    )
+
+
 def test_grip_release_sleeps_and_rising_edge_resumes_servo() -> None:
     supervisor = RobotSupervisor(make_config())
     supervisor.start()
@@ -71,6 +83,47 @@ def test_grip_release_sleeps_and_rising_edge_resumes_servo() -> None:
         resumed = wait_for_state(supervisor, WorkerState.ACTIVE)
         assert resumed.counters.servo_start_count == 2
         assert resumed.counters.servo_end_count == 1
+    finally:
+        report = supervisor.shutdown()
+        assert not report.killed
+
+
+def test_grip_edges_survive_latest_pose_overwrite() -> None:
+    config = replace(
+        make_config(),
+        servo_period_s=0.050,
+        pose_timeout_s=0.500,
+        worker_watchdog_s=1.000,
+    )
+    supervisor = RobotSupervisor(config)
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+
+        # Both snapshots are published inside one worker period. The pose slot
+        # ends as grip=True, but the release edge must survive on control IPC.
+        supervisor.publish_pose(pose(1, False))
+        supervisor.publish_pose(pose(2, True))
+        active = wait_for_status(
+            supervisor,
+            lambda status: (
+                status.state == WorkerState.ACTIVE
+                and status.counters.servo_start_count == 1
+            ),
+        )
+        assert not active.rearm_required
+
+        supervisor.publish_pose(pose(3, False, 0.01))
+        supervisor.publish_pose(pose(4, True, 0.02))
+        resumed = wait_for_status(
+            supervisor,
+            lambda status: (
+                status.state == WorkerState.ACTIVE
+                and status.counters.servo_start_count == 2
+                and status.counters.servo_end_count == 1
+            ),
+        )
+        assert not resumed.rearm_required
     finally:
         report = supervisor.shutdown()
         assert not report.killed
@@ -124,6 +177,7 @@ def test_stale_pose_stops_active_servo() -> None:
         stopped = wait_for_state(supervisor, WorkerState.IDLE)
         assert stopped.reason == "pose_timeout"
         assert stopped.counters.servo_end_count == 1
+        assert stopped.rearm_required
     finally:
         supervisor.shutdown()
 

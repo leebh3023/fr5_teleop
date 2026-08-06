@@ -28,6 +28,16 @@ async def receive_state(ws, state: str, timeout: float = 3.0) -> dict:
     raise AssertionError(f"did not receive worker state {state}")
 
 
+async def receive_status(ws, predicate, timeout: float = 3.0) -> dict:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        remaining = deadline - asyncio.get_running_loop().time()
+        message = await asyncio.wait_for(ws.receive_json(), timeout=remaining)
+        if message.get("type") == "status" and predicate(message):
+            return message
+    raise AssertionError("did not receive expected worker status")
+
+
 async def test_websocket_claim_pose_and_release_flow() -> None:
     root = Path(__file__).resolve().parents[2]
     config = TeleopConfig(
@@ -71,22 +81,25 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
                 }
 
             await ws.send_json(pose(0, False))
-            await asyncio.sleep(0.03)
             await ws.send_json(pose(1, True, 0.01))
             active = await receive_state(ws, "ACTIVE")
             assert active["tracking"] is True
+            assert active["rearm_required"] is False
 
             await ws.send_json(pose(2, False, 0.01))
-            sleeping = await receive_state(ws, "SLEEPING")
-            assert sleeping["tracking"] is False
-            assert sleeping["controller_id"] == session_id
-            assert sleeping["counters"]["servo_end_count"] == 1
-
             await ws.send_json(pose(3, True, 0.02))
-            resumed = await receive_state(ws, "ACTIVE")
+            resumed = await receive_status(
+                ws,
+                lambda status: (
+                    status.get("state") == "ACTIVE"
+                    and status.get("counters", {}).get("servo_start_count") == 2
+                ),
+            )
             assert resumed["tracking"] is True
+            assert resumed["rearm_required"] is False
             assert resumed["controller_id"] == session_id
             assert resumed["counters"]["servo_start_count"] == 2
+            assert resumed["counters"]["servo_end_count"] == 1
 
             await ws.send_json(
                 {

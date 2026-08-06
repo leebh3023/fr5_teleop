@@ -88,6 +88,7 @@ def run_robot_worker(
             generation=spec.generation,
             state=state,
             tracking=state == WorkerState.ACTIVE,
+            rearm_required=require_release,
             tick=tick,
             input_age_ms=input_age_ms,
             robot_tcp=robot_tcp,
@@ -206,6 +207,7 @@ def run_robot_worker(
             heartbeat_ns.value = now_ns
             tick += 1
             last_jitter_ms = (now_ns - next_deadline_ns) / 1_000_000
+            grip_events: list[ControlCommand] = []
 
             try:
                 while control_receive.poll():
@@ -213,6 +215,11 @@ def run_robot_worker(
                     if command in {ControlCommand.RELEASE, ControlCommand.SESSION_LOST}:
                         force_release = True
                         mailbox.invalidate()
+                    elif command in {
+                        ControlCommand.GRIP_PRESSED,
+                        ControlCommand.GRIP_RELEASED,
+                    }:
+                        grip_events.append(command)
                     elif command == ControlCommand.FAULT_RESET:
                         reset_requested = True
                     elif command == ControlCommand.SHUTDOWN:
@@ -236,6 +243,7 @@ def run_robot_worker(
                 and now_ns >= pose.received_ns
                 and now_ns - pose.received_ns <= pose_timeout_ns
             )
+            grip_press_requested = False
 
             if force_release:
                 if state in {
@@ -251,6 +259,24 @@ def run_robot_worker(
                 require_release = True
                 last_grip = True
                 force_release = False
+
+            for grip_event in grip_events:
+                if grip_event == ControlCommand.GRIP_RELEASED:
+                    if state in {
+                        WorkerState.ARMING,
+                        WorkerState.ACTIVE,
+                        WorkerState.STOPPING,
+                    } or servo_started:
+                        stop_servo(
+                            time.monotonic_ns(),
+                            "grip_released",
+                            next_state=WorkerState.SLEEPING,
+                        )
+                    else:
+                        require_release = False
+                        last_grip = False
+                else:
+                    grip_press_requested = True
 
             if state == WorkerState.FAULT:
                 if reset_requested and fresh and not pose.grip:
@@ -271,7 +297,12 @@ def run_robot_worker(
                 if fresh and not pose.grip:
                     require_release = False
                     last_grip = False
-                elif fresh and pose.grip and not require_release and not last_grip:
+                elif (
+                    fresh
+                    and pose.grip
+                    and not require_release
+                    and (grip_press_requested or not last_grip)
+                ):
                     state = WorkerState.ARMING
                     reason = "grip_rising_edge"
                     publish_status(now_ns, reason)

@@ -255,6 +255,9 @@ function updateStatusUI(data) {
   } else if (data.state === 'SLEEPING') {
     trackEl.textContent = '💤 슬립 — grip을 다시 누르면 재개';
     cardCtrl.classList.remove('tracking-active');
+  } else if (data.rearm_required) {
+    trackEl.textContent = '🟡 재무장 대기 — grip을 완전히 놓았다 다시 누르세요';
+    cardCtrl.classList.remove('tracking-active');
   } else if (data.tracking) {
     trackEl.textContent = '🟢 추적 중';
     cardCtrl.classList.add('tracking-active');
@@ -280,6 +283,21 @@ let refSpace = null;
 let gl = null;
 let xrSupported = false;
 let xrCheckComplete = false;
+let gripLatchedByHand = { left: false, right: false, none: false };
+
+function readGripButton(button, hand) {
+  const key = hand === 'left' || hand === 'right' ? hand : 'none';
+  if (!button) {
+    gripLatchedByHand[key] = false;
+    return false;
+  }
+  if (button.pressed || button.value >= 0.65) {
+    gripLatchedByHand[key] = true;
+  } else if (button.value <= 0.35) {
+    gripLatchedByHand[key] = false;
+  }
+  return gripLatchedByHand[key];
+}
 
 const btnVR = document.getElementById('btn-vr');
 btnVR.disabled = true;
@@ -341,6 +359,7 @@ async function startVR() {
 
     xrSession.addEventListener('end', () => {
       xrSession = null;
+      gripLatchedByHand = { left: false, right: false, none: false };
       document.getElementById('dot-xr').className = 'dot red';
       document.getElementById('xr-status').textContent = '종료됨';
       btnVR.textContent = '🥽 VR 세션 시작';
@@ -383,7 +402,7 @@ function onXRFrame(time, frame) {
     let trigger = false;
     if (source.gamepad) {
       trigger = source.gamepad.buttons[0]?.pressed || false;
-      grip = source.gamepad.buttons[1]?.pressed || false;
+      grip = readGripButton(source.gamepad.buttons[1], source.handedness);
     }
 
     // UI 업데이트

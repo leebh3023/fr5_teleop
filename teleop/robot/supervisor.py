@@ -47,6 +47,7 @@ class RobotSupervisor:
         self._ipc: WorkerIpc | None = None
         self._started_ns = 0
         self.latest_status: WorkerStatus | None = None
+        self._last_grip: bool | None = None
 
     @property
     def generation(self) -> int:
@@ -60,6 +61,7 @@ class RobotSupervisor:
         if self._process is not None and self._process.is_alive():
             raise RuntimeError("robot worker is already running")
         self._generation += 1
+        self._last_grip = None
         self._ipc = create_worker_ipc(self._context)
         spec = WorkerSpec(
             generation=self._generation,
@@ -87,10 +89,18 @@ class RobotSupervisor:
         if self._ipc is None:
             raise RuntimeError("robot worker is not running")
         self._ipc.mailbox.publish(pose, self._generation)
+        if self._last_grip is None or pose.grip != self._last_grip:
+            self.send_control(
+                ControlCommand.GRIP_PRESSED
+                if pose.grip
+                else ControlCommand.GRIP_RELEASED
+            )
+            self._last_grip = pose.grip
 
     def invalidate_pose(self) -> None:
         if self._ipc is not None:
             self._ipc.mailbox.invalidate()
+        self._last_grip = None
 
     def send_control(self, command: ControlCommand) -> None:
         if self._ipc is None:

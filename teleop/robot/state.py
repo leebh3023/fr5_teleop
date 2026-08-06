@@ -22,6 +22,8 @@ class WorkerState(str, Enum):
 class ControlCommand(str, Enum):
     RELEASE = "RELEASE"
     SESSION_LOST = "SESSION_LOST"
+    GRIP_PRESSED = "GRIP_PRESSED"
+    GRIP_RELEASED = "GRIP_RELEASED"
     FAULT_RESET = "FAULT_RESET"
     SHUTDOWN = "SHUTDOWN"
 
@@ -39,6 +41,7 @@ class WorkerStatus:
     generation: int
     state: WorkerState
     tracking: bool
+    rearm_required: bool
     tick: int
     input_age_ms: float | None
     robot_tcp: TcpPose | None

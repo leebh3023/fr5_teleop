@@ -13,8 +13,4 @@ recursive-include deploy *.yaml *.service
 recursive-include docs *.md
 recursive-include tests *.py *.sh
 recursive-include web *.html
-include fairino-python-sdk-main/LICENSE
-include fairino-python-sdk-main/README.md
-include fairino-python-sdk-main/linux/fairino/README.txt
-include fairino-python-sdk-main/linux/fairino/Robot.py
-include fairino-python-sdk-main/linux/fairino/setup.py
+prune fairino-python-sdk-main

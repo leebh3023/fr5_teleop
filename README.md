@@ -2,11 +2,13 @@
 
 Meta Quest 3의 WebXR controller pose를 받아 Fairino FR5의 Cartesian servo target으로 변환하는 Ubuntu 22.04용 teleoperation bridge다.
 
-현재 릴리즈 후보는 `0.2.0rc1`이다. 자동 검증 범위와 stable release 전에
+현재 릴리즈 후보는 `0.2.0rc2`다. 자동 검증 범위와 stable release 전에
 필요한 실제 장비 검증은 `RELEASE_CHECKLIST.md`에 구분되어 있다.
 운영 배포 단위는 source distribution을 풀어 설치하는 native
 venv+systemd 구성이다. wheel은 Python service 코드만 제공하며 별도
 config, WebXR static files와 Fairino SDK 경로가 필요하다.
+source distribution도 특정 firmware용 vendor SDK를 포함하지 않는다.
+controller firmware와 일치하는 공식 SDK를 별도로 배치한다.
 현장 release bundle의 `requirements-lock.txt`와 `wheelhouse/`는
 Ubuntu 22.04 / Python 3.10 x86-64 오프라인 설치에 사용한다.
 
@@ -136,6 +138,9 @@ vendor SDK의 `example/` 파일은 실제 motion command를 top-level에서 실�
 `ServoCart`는 FAIRINO 공식 예제에 맞춰 절대 좌표 mode, 8 ms `cmdT`,
 `acc=0`, `vel=0`, `filterT=0`, `gain=0`을 사용한다. SDK가 미개방으로
 표시한 파라미터를 motion tuning 용도로 변경하지 않는다.
+SDK V2.0.8의 legacy signature에는 `exaxis`가 없으므로 adapter가
+signature 차이를 감지해 해당 인자만 제외한다. 연결 flag도 신형
+`is_connect`와 legacy `is_conect`를 모두 지원한다.
 
 ## Grip sleep behavior
 
@@ -144,6 +149,11 @@ worker는 `ServoMoveEnd()`를 한 번 호출하고 `SLEEPING` 상태가 된다.
 같은 WebXR session에서 grip을 다시 누르면 현재 VR/TCP 원점을 새로
 잡고 servo를 재개한다. WebXR 종료, WebSocket 끊김, 명시적 control
 release는 session을 실제로 해제하고 `IDLE`로 돌아간다.
+
+pose는 최신 snapshot만 유지하지만 grip press/release 전환은 별도의
+비손실 control pipe로 전달한다. 두 전환이 한 worker tick 안에 연속
+도착해도 release edge가 최신 pose에 덮어써지지 않는다. stale timeout
+뒤에는 UI의 재무장 안내에 따라 grip을 완전히 놓았다 다시 누른다.
 
 ## WSL
 

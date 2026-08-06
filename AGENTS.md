@@ -69,7 +69,7 @@ Python worker는 일반 thread가 아니라 process로 둔다. 첨부 SDK의 여
 - `config.yaml`: dry-run 기본값과 server/robot/timing/motion/TLS 설정
 - `deploy/config.example.yaml`: `/opt`/`/etc` 경로를 사용하는 운영 예제
 - `pyproject.toml`, `requirements*.txt`: Python 3.10과 고정 의존성
-- `CHANGELOG.md`, `RELEASE_CHECKLIST.md`: `0.2.0rc1` 변경 이력과
+- `CHANGELOG.md`, `RELEASE_CHECKLIST.md`: `0.2.0rc2` 변경 이력과
   stable release 전 수동 검증 gate
 - `docs/FIELD_MANUAL_KO.md`: FR5/Quest 3 현장 설치, TLS, 저속
   commissioning, 장애 대응 한글 매뉴얼
@@ -86,7 +86,7 @@ Ubuntu 22.04 WSL smoke test에서 다음을 확인했다.
 - `fairino-python-sdk-main/linux/fairino/Robot.py` import가 성공한다.
 - 포함된 native extension은 CPython 3.10, x86-64 ELF이며 `libc`에 링크된다.
 - `setup.sh`가 `.venv-linux`를 만들고 `aiohttp 3.12.15`, `PyYAML 6.0.2`, `pytest 8.4.1`과 package를 설치한다.
-- unit/process/WebSocket 통합 테스트 31개가 통과한다.
+- unit/process/WebSocket 통합 테스트 38개가 통과한다.
 - dry-run server가 ready/live/UI 응답 후 `RobotWorker`를 graceful하게 종료한다.
 - systemd unit 문법을 Ubuntu 22.04의 `systemd-analyze verify`로 확인했다.
 - Linux Node runtime은 설치되어 있지 않다.
@@ -96,8 +96,9 @@ vendor SDK 소스가 보고하는 버전은 `SDK V2.2.7 / Robot V3.9.7`이지만
 기준선에서 발견된 다음 문제는 현재 구조에서 regression test 또는 adapter 경계로 처리한다.
 
 1. Linux SDK 경로는 config/CLI에서 검증한다.
-2. `FairinoRobotClient`가 필수 `exaxis`를 전달한다.
-3. `Robot.RPC.is_connect`와 SDK query로 연결을 검증한다.
+2. `FairinoRobotClient`가 신형 SDK에는 `exaxis`를 전달하고 V2.0.8의
+   legacy `ServoCart` signature에서는 해당 인자를 제외한다.
+3. `Robot.RPC.is_connect`/legacy `is_conect`와 SDK query로 연결을 검증한다.
 4. SDK의 정수/tuple 혼합 반환을 `RobotClientError`로 정규화한다.
 5. worker 종료는 `ServoMoveEnd -> CloseRPC` 순서를 소유한다.
 6. `webxr_ended`, WebSocket EOF, stale pose가 control stop 경로로 연결된다.
@@ -267,6 +268,7 @@ status 메시지는 pose마다 회신하지 않고 기본 10 Hz로 제한한다.
   "type": "status",
   "state": "ACTIVE",
   "tracking": true,
+  "rearm_required": false,
   "controller_id": "id",
   "ack_seq": 1234,
   "input_age_ms": 11.2,
@@ -306,7 +308,11 @@ IPC는 목적별로 분리한다.
    - lock을 잡은 상태에서 SDK 호출, logging, JSON 처리 또는 sleep을 하지 않는다.
 2. control channel
    - parent→worker 단방향 pipe다.
-   - `RELEASE`, `SESSION_LOST`, `FAULT_RESET`, `SHUTDOWN`처럼 유실되면 안 되는 저빈도 event를 전달한다.
+   - `GRIP_PRESSED`, `GRIP_RELEASED`, `RELEASE`, `SESSION_LOST`,
+     `FAULT_RESET`, `SHUTDOWN`처럼 유실되면 안 되는 저빈도 event를
+     전달한다.
+   - pose snapshot이 overwrite되어도 grip transition은 pipe에서
+     순서대로 보존한다.
    - pipe EOF도 `SESSION_LOST`로 취급한다.
 3. status channel
    - worker→parent 단방향 bounded channel이다.
@@ -414,10 +420,12 @@ close
 
 - Ubuntu와 Python version, SDK 경로, architecture 검증
 - child process 안에서만 `sys.path`와 vendor import 처리
-- `Robot.RPC.is_connect` 및 실제 harmless query를 이용한 연결 검증
+- `Robot.RPC.is_connect`/legacy `is_conect` 및 실제 harmless query를
+  이용한 연결 검증
 - SDK의 정수/tuple 혼합 반환을 일관된 `RobotResult`로 정규화
 - 모든 SDK 오류 코드를 typed exception 또는 result로 변환
-- `ServoCart(mode=0, ..., exaxis=[0,0,0,0])`처럼 첨부 SDK 시그니처를 정확히 적용
+- `ServoCart(mode=0, ...)`를 유지하되 SDK signature에 있을 때만
+  `exaxis=[0,0,0,0]` 적용
 - SDK에서 미개방으로 표시된 `acc`, `vel`, `filterT`, `gain`은 공식
   기본값 `0`을 유지
 - `ServoMoveEnd()` 뒤 `CloseRPC()` 호출
@@ -524,7 +532,7 @@ fault_count by reason
 - `RobotClient` Protocol
 - `FakeRobotClient`
 - `FairinoRobotClient`
-- 반환 형태 정규화와 `exaxis` 수정
+- 반환 형태 정규화와 SDK version별 `exaxis` 호환
 - connect/start/cart/end/close 호출 순서
 
 완료 조건: fake에서 성공, SDK error, exception, hang을 재현할 수 있고 Linux SDK import smoke test가 통과한다.

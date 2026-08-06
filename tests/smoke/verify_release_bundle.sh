@@ -2,8 +2,8 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BUNDLE_DIR="${1:-${PROJECT_DIR}/release/vr-teleop-0.2.0rc1}"
-VERSION="0.2.0rc1"
+BUNDLE_DIR="${1:-${PROJECT_DIR}/release/vr-teleop-0.2.0rc2}"
+VERSION="0.2.0rc2"
 VERIFY_DIR="$(mktemp -d)"
 
 cleanup() {

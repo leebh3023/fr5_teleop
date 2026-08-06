@@ -71,6 +71,7 @@ class TeleopRuntime:
                 "type": "status",
                 "state": "STARTING",
                 "tracking": False,
+                "rearm_required": True,
                 "controller_id": self.lease.session_id,
                 "ack_seq": self.lease.last_seq if self.lease.last_seq >= 0 else None,
                 "worker": {
