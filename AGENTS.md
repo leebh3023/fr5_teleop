@@ -35,7 +35,7 @@ Fairino FR5 Controller
 1. WebSocket 이벤트 루프는 Fairino SDK 지연이나 hang의 영향을 받지 않는다.
 2. 로봇 SDK는 별도 프로세스에 격리되고, 부모 프로세스가 worker health를 감시한다.
 3. servo tick은 WebXR frame 및 WebSocket 수신 주기와 분리된다.
-4. grip 해제, WebXR 종료, 연결 해제, pose timeout, worker fault, 서버 종료가 모두 명시적인 stop 경로로 연결된다.
+4. grip 해제는 servo를 정지하고 `SLEEPING`으로 전환하되 WebXR/lease를 유지하며, WebXR 종료, 연결 해제, pose timeout, worker fault, 서버 종료도 각각 명시적인 stop 경로로 연결된다.
 5. 실제 로봇 없이 protocol, 계산, 상태 머신, IPC, process lifecycle을 자동 검증할 수 있다.
 6. Ubuntu 22.04에서 한 번의 문서화된 설치 절차와 `systemd` unit으로 재현 가능하게 배포한다.
 7. 실제 로봇 활성화에는 명시적인 hardware 옵션과 작업자 확인이 필요하며 기본 실행은 항상 dry-run이다.
@@ -66,6 +66,8 @@ Python worker는 일반 thread가 아니라 process로 둔다. 첨부 SDK의 여
 - `fairino-python-sdk-main/`: Windows/Linux SDK, 예제, build 산출물이 섞인 vendor tree
 - `certs/`: 개발용 자체 서명 인증서가 로컬에 존재하지만 PEM은 Git ignore됨
 - `deploy/vr-teleop.service`: native Ubuntu systemd unit
+- `config.yaml`: dry-run 기본값과 server/robot/timing/motion/TLS 설정
+- `deploy/config.example.yaml`: `/opt`/`/etc` 경로를 사용하는 운영 예제
 - `pyproject.toml`, `requirements*.txt`: Python 3.10과 고정 의존성
 - `main.py` PyCharm 샘플은 제거됨
 - Git `main` branch의 기준선 첫 커밋은 `9b85763`임
@@ -75,8 +77,8 @@ Ubuntu 22.04 WSL smoke test에서 다음을 확인했다.
 - Ubuntu 22.04.5 LTS의 기본 Python은 3.10.12다.
 - `fairino-python-sdk-main/linux/fairino/Robot.py` import가 성공한다.
 - 포함된 native extension은 CPython 3.10, x86-64 ELF이며 `libc`에 링크된다.
-- `setup.sh`가 `.venv-linux`를 만들고 `aiohttp 3.12.15`, `pytest 8.4.1`과 package를 설치한다.
-- unit/process/WebSocket 통합 테스트 21개가 통과한다.
+- `setup.sh`가 `.venv-linux`를 만들고 `aiohttp 3.12.15`, `PyYAML 6.0.2`, `pytest 8.4.1`과 package를 설치한다.
+- unit/process/WebSocket 통합 테스트 28개가 통과한다.
 - dry-run server가 ready/live/UI 응답 후 `RobotWorker`를 graceful하게 종료한다.
 - systemd unit 문법을 Ubuntu 22.04의 `systemd-analyze verify`로 확인했다.
 - Linux Node runtime은 설치되어 있지 않다.
@@ -101,7 +103,7 @@ vendor SDK 소스가 보고하는 버전은 `SDK V2.2.7 / Robot V3.9.7`이지만
 - 실제 systemd 설치, reboot start, stop timeout
 - Quest에서 TLS trust, WebXR session, controller mapping, 재연결 UX
 - 회전 teleop
-- TOML config loader와 장기 metric exporter
+- 장기 metric exporter
 
 SDK의 `example/` 파일은 테스트가 아니다. 실제 로봇을 즉시 움직이는 top-level 코드가 많으므로 agent는 이를 자동 실행하지 않는다.
 
@@ -113,6 +115,7 @@ SDK의 `example/` 파일은 테스트가 아니다. 실제 로봇을 즉시 움�
 pyproject.toml
 requirements.txt
 README.md
+config.yaml                     # safe dry-run default
 server.py                       # 임시 호환 wrapper, 최종적으로 얇은 entry point
 
 teleop/
@@ -145,7 +148,7 @@ tests/
 
 deploy/
     vr-teleop.service
-    config.example.toml
+    config.example.yaml
 ```
 
 vendor SDK는 애플리케이션 package 안으로 복사하지 않는다. 기본 SDK 경로는 프로젝트 내부 Linux SDK로 둘 수 있지만 운영 배포에서는 config 또는 CLI로 명시한다.
@@ -165,28 +168,40 @@ runtime:
 server:
     host
     port
-    tls_cert_path
-    tls_key_path
     allowed_origins
-    control_token
     max_ws_message_bytes
+
+tls:
+    enabled
+    cert_path
+    key_path
 
 robot:
     ip
     sdk_path
+    exaxis_default
+
+timing:
     servo_period_s
     pose_timeout_s
     worker_watchdog_s
+    worker_startup_timeout_s
     graceful_shutdown_s
+
+motion:
     position_scale
+    ema_alpha
     max_step_mm
-    workspace_bounds
-    exaxis_default
+    workspace
 ```
 
 초기 dry-run 기준값은 기존 코드의 `servo_period_s=0.008`, `position_scale=500`, `max_step_mm=1.5`를 유지한다. `pose_timeout_s=0.100`, `status_hz=10`, `worker_watchdog_s=0.500`은 검증을 시작하기 위한 보수적 후보값이지 하드웨어 승인값이 아니다. 실제 로봇 테스트 결과 없이 timeout, step, workspace, scale 제한을 완화하지 않는다.
 
-CLI보다 config 파일을 기준으로 하고 CLI는 배포별 경로나 dry-run 선택만 override한다. 실제 로봇 모드는 `--robot <ip>`와 별도의 `--confirm-hardware`가 함께 있을 때만 허용한다.
+CLI보다 YAML config 파일을 기준으로 하고 CLI는 배포별 경로나 dry-run
+선택을 override한다. 상대 경로는 해당 YAML 파일의 디렉터리를 기준으로
+해석하며 알 수 없는 키와 잘못된 타입은 시작 시 거부한다. 실제 로봇
+모드는 YAML의 `dry_run: false` 또는 `--robot <ip>`에 더해 별도의
+`--confirm-hardware`가 있을 때만 허용한다.
 
 ## WebSocket protocol 설계
 
@@ -232,7 +247,7 @@ release_control
 fault_reset
 ```
 
-`webxr_ended`, `release_control`, controller WebSocket EOF는 worker의 stop control event로 전달한다. 브라우저도 WebXR 종료 전에 마지막 `grip=false` pose를 best-effort로 보내지만 서버는 그 메시지에 의존하지 않는다.
+`webxr_ended`, `release_control`, controller WebSocket EOF는 worker의 stop control event로 전달한다. 서버는 마지막 `grip=false` pose에 의존하지 않고 control event 자체로 정지한다.
 
 status 메시지는 pose마다 회신하지 않고 기본 10 Hz로 제한한다.
 
@@ -317,6 +332,11 @@ IDLE
     -> ARMING        유효하고 fresh한 controller pose에서 grip rising edge
     -> SHUTDOWN      종료 요청
 
+SLEEPING
+    -> ARMING        같은 WebXR/lease에서 grip rising edge
+    -> IDLE          WebXR/session/lease 상실
+    -> SHUTDOWN      종료 요청
+
 ARMING
     -> ACTIVE        TCP 원점 획득 + ServoMoveStart 성공
     -> STOPPING      grip/lease/session 상실
@@ -327,7 +347,8 @@ ACTIVE
     -> FAULT         ServoCart 또는 safety 오류
 
 STOPPING
-    -> IDLE          정상 stop 완료
+    -> SLEEPING      grip 해제 stop 완료
+    -> IDLE          stale pose 또는 session 상실 stop 완료
     -> FAULT         stop 실패
     -> SHUTDOWN      종료 경로의 stop 완료
 
@@ -348,6 +369,9 @@ FAULT
 - clutch session sequence
 
 FAULT는 latch된다. grip을 계속 누른 상태에서 자동 재시작하지 않는다.
+grip 해제는 WebXR session이나 controller lease를 해제하지 않는다.
+`ServoMoveEnd()` 후 SLEEPING에서 대기하며 같은 session의 새 grip rising
+edge에서 TCP/VR origin과 filter를 다시 초기화한다.
 
 ## servo loop 설계
 
@@ -401,9 +425,9 @@ vendor `Robot.py`를 직접 수정하지 않는다. 꼭 patch해야 하면 원�
 - pose에 증가하는 `seq` 포함
 - WebSocket 연결과 controller lease가 없으면 VR control 활성화를 제한
 - `bufferedAmount` 기반 backpressure와 drop counter 표시
-- WebXR `end`에서 `release_control`과 best-effort grip=false 전송
+- WebXR `end`에서 `webxr_ended` control event 전송
 - WebSocket 재연결 뒤 기존 grip 상태로 자동 재개하지 않음
-- server의 `IDLE/ARMING/ACTIVE/STOPPING/FAULT`를 UI에 구분 표시
+- server의 `IDLE/SLEEPING/ARMING/ACTIVE/STOPPING/FAULT`를 UI에 구분 표시
 - stale input, worker fault, controller busy, TLS 오류를 사용자에게 보이게 표시
 - status를 pose acknowledgement가 아닌 독립 stream으로 처리
 
@@ -416,6 +440,7 @@ VR 내부 화면이 비어 있어도 fault와 tracking 상태를 작업자가 �
 - 부모 asyncio process에서는 Fairino SDK 메서드를 호출하지 않는다.
 - 하나의 worker process만 로봇 SDK lifecycle을 소유한다.
 - grip은 dead-man switch이며 stale pose는 grip=false와 동등하게 취급한다.
+- grip 해제는 servo를 정지하지만 WebXR session과 controller lease는 유지한다.
 - `ServoMoveStart` 성공 전에는 ACTIVE가 될 수 없다.
 - `ServoMoveStart` 실패 후 `servo_started=True`로 설정하지 않는다.
 - controller disconnect, WebXR end, lease loss, protocol fault가 stop event로 연결된다.
@@ -543,6 +568,7 @@ fault_count by reason
 
 - burst pose에서 최신 값만 소비
 - pose timeout과 grip release stop
+- grip release 후 SLEEPING, 같은 session의 rising edge 재개
 - controller/WebXR disconnect stop
 - `ServoMoveStart` 실패 시 ACTIVE 진입 금지
 - `ServoCart` 오류 후 FAULT
@@ -619,7 +645,7 @@ python -m teleop --dry-run --no-tls
 
 ```text
 /opt/vr-teleop/                 application + venv
-/etc/vr-teleop/config.toml      runtime config
+/etc/vr-teleop/config.yaml      runtime config
 /etc/vr-teleop/tls/cert.pem     certificate
 /etc/vr-teleop/tls/key.pem      private key
 systemd: vr-teleop.service

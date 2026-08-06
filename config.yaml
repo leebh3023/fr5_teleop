@@ -1,0 +1,38 @@
+# Safe local default. Hardware mode still requires --confirm-hardware.
+runtime:
+  dry_run: true
+  log_level: INFO
+  status_hz: 10
+
+server:
+  host: 0.0.0.0
+  port: 8443
+  web_dir: web
+  max_ws_message_bytes: 4096
+  allowed_origins: []
+
+tls:
+  enabled: true
+  cert_path: certs/cert.pem
+  key_path: certs/key.pem
+
+robot:
+  ip: 192.168.58.2
+  sdk_path: fairino-python-sdk-main/linux
+  exaxis_default: [0.0, 0.0, 0.0, 0.0]
+
+timing:
+  servo_period_s: 0.008
+  pose_timeout_s: 0.100
+  worker_watchdog_s: 0.500
+  worker_startup_timeout_s: 10.0
+  graceful_shutdown_s: 2.0
+
+motion:
+  position_scale: 500.0
+  ema_alpha: 0.25
+  max_step_mm: 1.5
+  workspace:
+    x: [-600.0, 600.0]
+    y: [-600.0, 600.0]
+    z: [50.0, 700.0]

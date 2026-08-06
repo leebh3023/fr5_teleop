@@ -177,6 +177,7 @@ async def ready_handler(request: web.Request) -> web.Response:
         and status.state
         in {
             WorkerState.IDLE,
+            WorkerState.SLEEPING,
             WorkerState.ARMING,
             WorkerState.ACTIVE,
         }

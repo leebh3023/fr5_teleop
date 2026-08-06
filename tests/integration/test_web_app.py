@@ -76,6 +76,18 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
             active = await receive_state(ws, "ACTIVE")
             assert active["tracking"] is True
 
+            await ws.send_json(pose(2, False, 0.01))
+            sleeping = await receive_state(ws, "SLEEPING")
+            assert sleeping["tracking"] is False
+            assert sleeping["controller_id"] == session_id
+            assert sleeping["counters"]["servo_end_count"] == 1
+
+            await ws.send_json(pose(3, True, 0.02))
+            resumed = await receive_state(ws, "ACTIVE")
+            assert resumed["tracking"] is True
+            assert resumed["controller_id"] == session_id
+            assert resumed["counters"]["servo_start_count"] == 2
+
             await ws.send_json(
                 {
                     "version": 1,

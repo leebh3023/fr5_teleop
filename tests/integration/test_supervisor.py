@@ -52,7 +52,7 @@ def wait_for_state(
     )
 
 
-def test_worker_requires_release_then_starts_and_stops_servo() -> None:
+def test_grip_release_sleeps_and_rising_edge_resumes_servo() -> None:
     supervisor = RobotSupervisor(make_config())
     supervisor.start()
     try:
@@ -64,8 +64,13 @@ def test_worker_requires_release_then_starts_and_stops_servo() -> None:
         assert active.counters.servo_start_count == 1
 
         supervisor.publish_pose(pose(3, False, 0.01))
-        idle = wait_for_state(supervisor, WorkerState.IDLE)
-        assert idle.counters.servo_end_count == 1
+        sleeping = wait_for_state(supervisor, WorkerState.SLEEPING)
+        assert sleeping.counters.servo_end_count == 1
+
+        supervisor.publish_pose(pose(4, True, 0.02))
+        resumed = wait_for_state(supervisor, WorkerState.ACTIVE)
+        assert resumed.counters.servo_start_count == 2
+        assert resumed.counters.servo_end_count == 1
     finally:
         report = supervisor.shutdown()
         assert not report.killed
@@ -82,6 +87,26 @@ def test_session_lost_stops_active_servo() -> None:
         wait_for_state(supervisor, WorkerState.ACTIVE)
         supervisor.send_control(ControlCommand.SESSION_LOST)
         stopped = wait_for_state(supervisor, WorkerState.IDLE)
+        assert stopped.counters.servo_end_count == 1
+    finally:
+        supervisor.shutdown()
+
+
+def test_session_lost_leaves_sleeping_state_for_idle() -> None:
+    supervisor = RobotSupervisor(make_config())
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        time.sleep(0.03)
+        supervisor.publish_pose(pose(2, True))
+        wait_for_state(supervisor, WorkerState.ACTIVE)
+        supervisor.publish_pose(pose(3, False))
+        wait_for_state(supervisor, WorkerState.SLEEPING)
+
+        supervisor.send_control(ControlCommand.SESSION_LOST)
+        stopped = wait_for_state(supervisor, WorkerState.IDLE)
+        assert stopped.reason == "session_release"
         assert stopped.counters.servo_end_count == 1
     finally:
         supervisor.shutdown()

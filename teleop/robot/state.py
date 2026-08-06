@@ -10,6 +10,7 @@ from teleop.control_math import TcpPose
 class WorkerState(str, Enum):
     STARTING = "STARTING"
     IDLE = "IDLE"
+    SLEEPING = "SLEEPING"
     ARMING = "ARMING"
     ACTIVE = "ACTIVE"
     STOPPING = "STOPPING"

@@ -47,7 +47,7 @@ def run_robot_worker(
     heartbeat_ns: Any,
 ) -> None:
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, spec.config.log_level),
         format="%(asctime)s [%(processName)s] [%(levelname)s] %(message)s",
     )
     config = spec.config
@@ -117,6 +117,7 @@ def run_robot_worker(
         *,
         fault_after: str | None = None,
         shutdown_after: bool = False,
+        next_state: WorkerState = WorkerState.IDLE,
     ) -> None:
         nonlocal state, fault, reason, servo_started, robot_tcp
         nonlocal require_release, last_grip
@@ -134,15 +135,19 @@ def run_robot_worker(
                 servo_started = False
         planner.release()
         robot_tcp = None
-        require_release = True
-        last_grip = True
+        if next_state == WorkerState.SLEEPING:
+            require_release = False
+            last_grip = False
+        else:
+            require_release = True
+            last_grip = True
         if shutdown_after and stop_error is None:
             state = WorkerState.SHUTDOWN
         elif fault_after is not None or stop_error is not None:
             state = WorkerState.FAULT
             fault = fault_after or f"servo stop failed: {stop_error}"
         else:
-            state = WorkerState.IDLE
+            state = next_state
         publish_status(time.monotonic_ns(), stop_reason)
 
     heartbeat_ns.value = time.monotonic_ns()
@@ -204,6 +209,10 @@ def run_robot_worker(
                     WorkerState.STOPPING,
                 } or servo_started:
                     stop_servo(now_ns, "session_release")
+                elif state == WorkerState.SLEEPING:
+                    state = WorkerState.IDLE
+                    reason = "session_release"
+                    publish_status(now_ns, reason)
                 require_release = True
                 last_grip = True
                 force_release = False
@@ -223,7 +232,7 @@ def run_robot_worker(
                         reason = "fault_reset_failed"
                 reset_requested = False
 
-            elif state == WorkerState.IDLE:
+            elif state in {WorkerState.IDLE, WorkerState.SLEEPING}:
                 if fresh and not pose.grip:
                     require_release = False
                     last_grip = False
@@ -252,7 +261,11 @@ def run_robot_worker(
                 if not fresh:
                     stop_servo(now_ns, "pose_timeout")
                 elif not pose.grip:
-                    stop_servo(now_ns, "grip_released")
+                    stop_servo(
+                        now_ns,
+                        "grip_released",
+                        next_state=WorkerState.SLEEPING,
+                    )
                 else:
                     try:
                         robot_tcp = planner.target_for(pose.position_m)

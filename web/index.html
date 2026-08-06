@@ -252,6 +252,9 @@ function updateStatusUI(data) {
   if (data.state === 'FAULT') {
     trackEl.textContent = `🔴 FAULT: ${data.fault || '알 수 없는 오류'}`;
     cardCtrl.classList.remove('tracking-active');
+  } else if (data.state === 'SLEEPING') {
+    trackEl.textContent = '💤 슬립 — grip을 다시 누르면 재개';
+    cardCtrl.classList.remove('tracking-active');
   } else if (data.tracking) {
     trackEl.textContent = '🟢 추적 중';
     cardCtrl.classList.add('tracking-active');

@@ -52,5 +52,6 @@ TELEOP_PYTHON="${VENV_DIR}/bin/python" \
 echo
 echo "Setup complete."
 echo "Dry-run: ${VENV_DIR}/bin/python -m teleop"
+echo "Config: ${SCRIPT_DIR}/config.yaml"
 echo "Quest URL: https://${LOCAL_IP}:8443"
-echo "Real robot mode always requires both --robot and --confirm-hardware."
+echo "Hardware mode always requires --confirm-hardware, including when enabled in YAML."
