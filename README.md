@@ -74,6 +74,12 @@ motion:
   position_scale: 500.0
 ```
 
+`timing.servo_transition_window_s` 안에
+`timing.servo_transition_limit`개 이상의 `ServoMoveStart/End` 전환이
+발생하면 worker가 누적 start/end count, 최근 전환 원인, pose sequence와
+입력 age를 `ERROR`로 기록한다. 기본값은 1초 안에 4회이며 로그 폭주를
+막기 위해 같은 window 동안 한 번만 기록한다.
+
 다른 설정 파일은 `--config`로 선택한다. `--host`, `--port`, `--scale`,
 `--sdk-path`, `--pose-timeout-ms`, `--no-tls`는 YAML 값을 일시적으로
 override한다.

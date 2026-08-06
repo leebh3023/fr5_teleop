@@ -78,7 +78,7 @@ Ubuntu 22.04 WSL smoke test에서 다음을 확인했다.
 - `fairino-python-sdk-main/linux/fairino/Robot.py` import가 성공한다.
 - 포함된 native extension은 CPython 3.10, x86-64 ELF이며 `libc`에 링크된다.
 - `setup.sh`가 `.venv-linux`를 만들고 `aiohttp 3.12.15`, `PyYAML 6.0.2`, `pytest 8.4.1`과 package를 설치한다.
-- unit/process/WebSocket 통합 테스트 28개가 통과한다.
+- unit/process/WebSocket 통합 테스트 31개가 통과한다.
 - dry-run server가 ready/live/UI 응답 후 `RobotWorker`를 graceful하게 종료한다.
 - systemd unit 문법을 Ubuntu 22.04의 `systemd-analyze verify`로 확인했다.
 - Linux Node runtime은 설치되어 있지 않다.
@@ -183,6 +183,8 @@ robot:
 
 timing:
     servo_period_s
+    servo_transition_window_s
+    servo_transition_limit
     pose_timeout_s
     worker_watchdog_s
     worker_startup_timeout_s
@@ -467,6 +469,9 @@ VR 내부 화면이 비어 있어도 fault와 tracking 상태를 작업자가 �
 - 모든 state transition과 reason
 - SDK version, robot software version, SDK error code
 - stop reason과 stop/close 결과
+- 설정된 rolling window 안에서 start/end 전환이 임계값에 도달한 경우
+  누적 count, 최신 전환, reason, pose seq와 input age를 포함한
+  rate-limited `ERROR`
 - worker hang, SIGTERM/SIGKILL 여부
 
 pose 전체를 매 frame 기록하지 않는다. timing metric은 일정 구간으로 집계한다.

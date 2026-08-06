@@ -23,6 +23,9 @@ robot:
 
 timing:
   servo_period_s: 0.008
+  # ERROR log after this many start/end events occur inside the window.
+  servo_transition_window_s: 1.0
+  servo_transition_limit: 4
   pose_timeout_s: 0.100
   worker_watchdog_s: 0.500
   worker_startup_timeout_s: 10.0

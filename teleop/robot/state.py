@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from collections import deque
+from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -51,3 +52,27 @@ class WorkerStatus:
         result = asdict(self)
         result["state"] = self.state.value
         return result
+
+
+@dataclass
+class ServoTransitionMonitor:
+    window_ns: int
+    limit: int
+    _events: deque[int] = field(default_factory=deque)
+    _last_report_ns: int | None = None
+
+    def record(self, now_ns: int) -> int | None:
+        cutoff_ns = now_ns - self.window_ns
+        while self._events and self._events[0] < cutoff_ns:
+            self._events.popleft()
+        self._events.append(now_ns)
+
+        if len(self._events) < self.limit:
+            return None
+        if (
+            self._last_report_ns is not None
+            and now_ns - self._last_report_ns < self.window_ns
+        ):
+            return None
+        self._last_report_ns = now_ns
+        return len(self._events)

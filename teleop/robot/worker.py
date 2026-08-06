@@ -14,6 +14,7 @@ from teleop.robot.fake_client import FakeRobotBehavior, FakeRobotClient
 from teleop.robot.fairino_client import FairinoRobotClient
 from teleop.robot.state import (
     ControlCommand,
+    ServoTransitionMonitor,
     WorkerCounters,
     WorkerState,
     WorkerStatus,
@@ -72,6 +73,10 @@ def run_robot_worker(
     period_ns = int(config.servo_period_s * 1_000_000_000)
     pose_timeout_ns = int(config.pose_timeout_s * 1_000_000_000)
     status_period_ns = int(1_000_000_000 / config.status_hz)
+    transition_monitor = ServoTransitionMonitor(
+        window_ns=int(config.servo_transition_window_s * 1_000_000_000),
+        limit=config.servo_transition_limit,
+    )
 
     def publish_status(now_ns: int, transition_reason: str | None = None) -> None:
         nonlocal last_status_ns
@@ -111,6 +116,33 @@ def run_robot_worker(
         finally:
             last_sdk_call_ms = (time.monotonic_ns() - started_ns) / 1_000_000
 
+    def record_servo_transition(
+        now_ns: int, transition: str, transition_reason: str
+    ) -> None:
+        event_count = transition_monitor.record(now_ns)
+        if event_count is None:
+            return
+        pose = mailbox.read()
+        input_age_ms = (
+            max(0.0, (now_ns - pose.received_ns) / 1_000_000)
+            if pose.valid and pose.received_ns
+            else None
+        )
+        log.error(
+            "rapid servo start/end transitions detected: "
+            "events=%d window_s=%.3f limit=%d latest=%s reason=%s "
+            "start_count=%d end_count=%d pose_seq=%s input_age_ms=%s",
+            event_count,
+            config.servo_transition_window_s,
+            config.servo_transition_limit,
+            transition,
+            transition_reason,
+            counters.servo_start_count,
+            counters.servo_end_count,
+            pose.seq if pose.valid else None,
+            f"{input_age_ms:.1f}" if input_age_ms is not None else None,
+        )
+
     def stop_servo(
         now_ns: int,
         stop_reason: str,
@@ -133,6 +165,9 @@ def run_robot_worker(
                 stop_error = str(exc)
             finally:
                 servo_started = False
+                record_servo_transition(
+                    time.monotonic_ns(), "end", stop_reason
+                )
         planner.release()
         robot_tcp = None
         if next_state == WorkerState.SLEEPING:
@@ -245,6 +280,9 @@ def run_robot_worker(
                         planner.engage(pose.position_m, robot_tcp)
                         timed_call(client.servo_start)
                         counters.servo_start_count += 1
+                        record_servo_transition(
+                            time.monotonic_ns(), "start", reason
+                        )
                         servo_started = True
                         state = WorkerState.ACTIVE
                         reason = "servo_started"

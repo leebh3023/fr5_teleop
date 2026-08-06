@@ -28,6 +28,9 @@ tls:
 robot:
   ip: 192.168.58.2
   sdk_path: sdk/linux
+timing:
+  servo_transition_window_s: 2.0
+  servo_transition_limit: 6
 motion:
   position_scale: 250
   workspace:
@@ -52,6 +55,8 @@ def test_yaml_loads_values_and_resolves_relative_paths(tmp_path: Path) -> None:
     assert config.sdk_path == (tmp_path / "sdk/linux").resolve()
     assert config.tls_cert_path is None
     assert config.tls_key_path is None
+    assert config.servo_transition_window_s == 2.0
+    assert config.servo_transition_limit == 6
     assert config.position_scale == 250.0
     assert config.workspace.z == (100.0, 500.0)
     assert config.allowed_origins == ("https://quest.local",)

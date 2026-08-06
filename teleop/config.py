@@ -45,6 +45,8 @@ class TeleopConfig:
         default_factory=lambda: PROJECT_ROOT / "certs" / "key.pem"
     )
     servo_period_s: float = 0.008
+    servo_transition_window_s: float = 1.0
+    servo_transition_limit: int = 4
     pose_timeout_s: float = 0.100
     worker_watchdog_s: float = 0.500
     worker_startup_timeout_s: float = 10.0
@@ -69,6 +71,13 @@ class TeleopConfig:
             raise ValueError("robot_ip is required outside dry-run")
         if not isfinite(self.servo_period_s) or self.servo_period_s <= 0:
             raise ValueError("servo_period_s must be positive")
+        if (
+            not isfinite(self.servo_transition_window_s)
+            or self.servo_transition_window_s <= 0
+        ):
+            raise ValueError("servo_transition_window_s must be positive")
+        if self.servo_transition_limit < 2:
+            raise ValueError("servo_transition_limit must be at least 2")
         if (
             not isfinite(self.pose_timeout_s)
             or self.pose_timeout_s < self.servo_period_s
@@ -152,6 +161,8 @@ class TeleopConfig:
             timing,
             {
                 "servo_period_s",
+                "servo_transition_window_s",
+                "servo_transition_limit",
                 "pose_timeout_s",
                 "worker_watchdog_s",
                 "worker_startup_timeout_s",
@@ -206,6 +217,19 @@ class TeleopConfig:
             servo_period_s=_number(
                 timing.get("servo_period_s", defaults.servo_period_s),
                 "timing.servo_period_s",
+            ),
+            servo_transition_window_s=_number(
+                timing.get(
+                    "servo_transition_window_s",
+                    defaults.servo_transition_window_s,
+                ),
+                "timing.servo_transition_window_s",
+            ),
+            servo_transition_limit=_integer(
+                timing.get(
+                    "servo_transition_limit", defaults.servo_transition_limit
+                ),
+                "timing.servo_transition_limit",
             ),
             pose_timeout_s=_number(
                 timing.get("pose_timeout_s", defaults.pose_timeout_s),
