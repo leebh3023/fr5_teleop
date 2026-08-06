@@ -107,10 +107,12 @@ class FairinoRobotClient:
             desc_pos=list(target),
             exaxis=list(self.config.exaxis_default),
             pos_gain=[1.0] * 6,
-            acc=100.0,
-            vel=100.0,
+            # FAIRINO marks these controls as unavailable and documents zero
+            # as the supported default for Cartesian servo streaming.
+            acc=0.0,
+            vel=0.0,
             cmdT=self.config.servo_period_s,
-            filterT=0.05,
+            filterT=0.0,
             gain=0.0,
         )
         self._expect_zero(result, "ServoCart")

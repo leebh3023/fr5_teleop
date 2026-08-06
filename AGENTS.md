@@ -69,6 +69,8 @@ Python worker는 일반 thread가 아니라 process로 둔다. 첨부 SDK의 여
 - `config.yaml`: dry-run 기본값과 server/robot/timing/motion/TLS 설정
 - `deploy/config.example.yaml`: `/opt`/`/etc` 경로를 사용하는 운영 예제
 - `pyproject.toml`, `requirements*.txt`: Python 3.10과 고정 의존성
+- `CHANGELOG.md`, `RELEASE_CHECKLIST.md`: `0.2.0rc1` 변경 이력과
+  stable release 전 수동 검증 gate
 - `main.py` PyCharm 샘플은 제거됨
 - Git `main` branch의 기준선 첫 커밋은 `9b85763`임
 
@@ -410,6 +412,8 @@ close
 - SDK의 정수/tuple 혼합 반환을 일관된 `RobotResult`로 정규화
 - 모든 SDK 오류 코드를 typed exception 또는 result로 변환
 - `ServoCart(mode=0, ..., exaxis=[0,0,0,0])`처럼 첨부 SDK 시그니처를 정확히 적용
+- SDK에서 미개방으로 표시된 `acc`, `vel`, `filterT`, `gain`은 공식
+  기본값 `0`을 유지
 - `ServoMoveEnd()` 뒤 `CloseRPC()` 호출
 - SDK/robot software version을 시작 로그에 기록
 

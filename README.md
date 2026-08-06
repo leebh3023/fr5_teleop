@@ -2,6 +2,12 @@
 
 Meta Quest 3의 WebXR controller pose를 받아 Fairino FR5의 Cartesian servo target으로 변환하는 Ubuntu 22.04용 teleoperation bridge다.
 
+현재 릴리즈 후보는 `0.2.0rc1`이다. 자동 검증 범위와 stable release 전에
+필요한 실제 장비 검증은 `RELEASE_CHECKLIST.md`에 구분되어 있다.
+운영 배포 단위는 source distribution을 풀어 설치하는 native
+venv+systemd 구성이다. wheel은 Python service 코드만 제공하며 별도
+config, WebXR static files와 Fairino SDK 경로가 필요하다.
+
 ## Architecture
 
 ```text
@@ -118,6 +124,10 @@ CLI만으로 일시 override할 때는
 - robot 주변 안전과 observer
 
 vendor SDK의 `example/` 파일은 실제 motion command를 top-level에서 실행할 수 있으므로 자동 실행하지 않는다.
+
+`ServoCart`는 FAIRINO 공식 예제에 맞춰 절대 좌표 mode, 8 ms `cmdT`,
+`acc=0`, `vel=0`, `filterT=0`, `gain=0`을 사용한다. SDK가 미개방으로
+표시한 파라미터를 motion tuning 용도로 변경하지 않는다.
 
 ## Grip sleep behavior
 

@@ -41,6 +41,17 @@ def test_servo_cart_supplies_required_exaxis() -> None:
     client.servo_cart(target)
     assert stub.servo_cart_call["desc_pos"] == list(target)
     assert stub.servo_cart_call["exaxis"] == [0.0, 0.0, 0.0, 0.0]
+    assert stub.servo_cart_call == {
+        "mode": 0,
+        "desc_pos": list(target),
+        "exaxis": [0.0, 0.0, 0.0, 0.0],
+        "pos_gain": [1.0] * 6,
+        "acc": 0.0,
+        "vel": 0.0,
+        "cmdT": 0.008,
+        "filterT": 0.0,
+        "gain": 0.0,
+    }
 
 
 def test_integer_error_from_pose_query_is_normalized() -> None:
