@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VR Teleop — FR5</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #0a0e17;
+    color: #e0e6f0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+  }
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .card {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    width: 100%;
+    max-width: 420px;
+  }
+  .card h2 {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #8892a8;
+    margin-bottom: 10px;
+  }
+  .status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 0.95rem;
+  }
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+  }
+  .dot.green { background: #22c55e; box-shadow: 0 0 8px #22c55e88; }
+  .dot.red { background: #ef4444; box-shadow: 0 0 8px #ef444488; }
+  .dot.yellow { background: #eab308; box-shadow: 0 0 8px #eab30888; }
+  .mono {
+    font-family: 'SF Mono', 'Consolas', monospace;
+    font-size: 0.85rem;
+    color: #a5b4fc;
+  }
+  #btn-vr {
+    width: 100%;
+    max-width: 420px;
+    padding: 16px;
+    font-size: 1.1rem;
+    font-weight: 600;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+    color: white;
+    margin-bottom: 12px;
+    transition: opacity 0.2s;
+  }
+  #btn-vr:hover { opacity: 0.9; }
+  #btn-vr:disabled {
+    background: #374151;
+    color: #6b7280;
+    cursor: not-allowed;
+  }
+  .tracking-active {
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.3); }
+    50% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+  }
+  .instructions {
+    font-size: 0.85rem;
+    color: #8892a8;
+    line-height: 1.6;
+    text-align: center;
+  }
+  .instructions b { color: #a5b4fc; }
+</style>
+</head>
+<body>
+
+<h1>🤖 VR Teleop — FR5</h1>
+
+<button id="btn-vr">🥽 VR 세션 시작</button>
+
+<div class="card" id="card-conn">
+  <h2>연결 상태</h2>
+  <div class="status-row">
+    <span><span class="dot red" id="dot-ws"></span>WebSocket</span>
+    <span class="mono" id="ws-status">연결 안됨</span>
+  </div>
+  <div class="status-row">
+    <span><span class="dot red" id="dot-xr"></span>WebXR</span>
+    <span class="mono" id="xr-status">비활성</span>
+  </div>
+</div>
+
+<div class="card" id="card-ctrl">
+  <h2>컨트롤러</h2>
+  <div class="status-row">
+    <span>그립 (데드맨)</span>
+    <span class="mono" id="grip-status">—</span>
+  </div>
+  <div class="status-row">
+    <span>추적 상태</span>
+    <span class="mono" id="track-status">대기</span>
+  </div>
+  <div class="status-row">
+    <span>VR 위치</span>
+    <span class="mono" id="vr-pos">—</span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>로봇 TCP 목표</h2>
+  <div class="status-row">
+    <span>X, Y, Z (mm)</span>
+    <span class="mono" id="robot-pos">—</span>
+  </div>
+  <div class="status-row">
+    <span>프레임</span>
+    <span class="mono" id="frame-count">0</span>
+  </div>
+</div>
+
+<div class="card instructions">
+  <b>그립 버튼</b>을 꾹 누르면 로봇이 손을 따라갑니다.<br>
+  놓으면 정지, 다시 누르면 현재 위치에서 재시작.
+</div>
+
+<script>
+// ──────────────────────────────────────────
+//  WebSocket
+// ──────────────────────────────────────────
+let ws = null;
+let wsConnected = false;
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/ws`;
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    wsConnected = true;
+    document.getElementById('dot-ws').className = 'dot green';
+    document.getElementById('ws-status').textContent = '연결됨';
+    console.log('WebSocket 연결됨');
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'status') {
+        updateStatusUI(data);
+      }
+    } catch(err) {}
+  };
+
+  ws.onclose = () => {
+    wsConnected = false;
+    document.getElementById('dot-ws').className = 'dot red';
+    document.getElementById('ws-status').textContent = '끊김';
+    setTimeout(connectWS, 2000);
+  };
+
+  ws.onerror = () => {
+    ws.close();
+  };
+}
+
+function sendPose(hand, pos, ori, grip, trigger) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify({
+    type: 'pose',
+    hand: hand,
+    position: [pos.x, pos.y, pos.z],
+    orientation: [ori.x, ori.y, ori.z, ori.w],
+    grip: grip,
+    trigger: trigger,
+    timestamp: performance.now()
+  }));
+}
+
+function updateStatusUI(data) {
+  const trackEl = document.getElementById('track-status');
+  const cardCtrl = document.getElementById('card-ctrl');
+
+  if (data.tracking) {
+    trackEl.textContent = '🟢 추적 중';
+    cardCtrl.classList.add('tracking-active');
+  } else {
+    trackEl.textContent = '대기';
+    cardCtrl.classList.remove('tracking-active');
+  }
+
+  if (data.robot_tcp) {
+    const t = data.robot_tcp;
+    document.getElementById('robot-pos').textContent =
+      `${t[0].toFixed(1)}, ${t[1].toFixed(1)}, ${t[2].toFixed(1)}`;
+  }
+  document.getElementById('frame-count').textContent = data.frame || 0;
+}
+
+// ──────────────────────────────────────────
+//  WebXR
+// ──────────────────────────────────────────
+let xrSession = null;
+let refSpace = null;
+let gl = null;
+
+const btnVR = document.getElementById('btn-vr');
+
+// WebXR 지원 확인
+if (navigator.xr) {
+  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+    if (supported) {
+      btnVR.addEventListener('click', startVR);
+    } else {
+      btnVR.textContent = '❌ VR 미지원 기기';
+      btnVR.disabled = true;
+    }
+  });
+} else {
+  btnVR.textContent = '❌ WebXR 미지원 브라우저';
+  btnVR.disabled = true;
+}
+
+async function startVR() {
+  try {
+    xrSession = await navigator.xr.requestSession('immersive-vr', {
+      requiredFeatures: ['local-floor']
+    });
+
+    // WebXR은 렌더링할 3D 그래픽(WebGL) 레이어가 없으면 무한 로딩에 빠집니다.
+    // 위치 추적만 하더라도 더미(Dummy) WebGL 캔버스를 만들어 연결해 주어야 합니다.
+    const canvas = document.createElement('canvas');
+    gl = canvas.getContext('webgl', { xrCompatible: true });
+    await gl.makeXRCompatible();
+    xrSession.updateRenderState({
+      baseLayer: new XRWebGLLayer(xrSession, gl)
+    });
+
+    document.getElementById('dot-xr').className = 'dot green';
+    document.getElementById('xr-status').textContent = '활성';
+    btnVR.textContent = '🥽 VR 세션 활성';
+    btnVR.disabled = true;
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'event', event: 'webxr_started' }));
+    }
+
+    refSpace = await xrSession.requestReferenceSpace('local-floor');
+
+    xrSession.addEventListener('end', () => {
+      xrSession = null;
+      document.getElementById('dot-xr').className = 'dot red';
+      document.getElementById('xr-status').textContent = '종료됨';
+      btnVR.textContent = '🥽 VR 세션 시작';
+      btnVR.disabled = false;
+
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'event', event: 'webxr_ended' }));
+      }
+    });
+
+    xrSession.requestAnimationFrame(onXRFrame);
+  } catch (err) {
+    console.error('VR 세션 시작 실패:', err);
+    document.getElementById('xr-status').textContent = '에러';
+  }
+}
+
+function onXRFrame(time, frame) {
+  if (!xrSession) return;
+  xrSession.requestAnimationFrame(onXRFrame);
+
+  // 프레임마다 화면을 지워주어 VR 화면이 검은색(또는 회색) 빈 공간으로 정상 표시되게 합니다.
+  if (gl && xrSession.renderState.baseLayer) {
+    const layer = xrSession.renderState.baseLayer;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+    gl.clearColor(0.1, 0.1, 0.1, 1.0); // 어두운 회색
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  }
+
+  for (const source of xrSession.inputSources) {
+    // 오른손 컨트롤러 우선, 없으면 왼손
+    if (!source.gripSpace) continue;
+
+    const pose = frame.getPose(source.gripSpace, refSpace);
+    if (!pose) continue;
+
+    const pos = pose.transform.position;
+    const ori = pose.transform.orientation;
+
+    // 버튼: 0=trigger, 1=grip
+    let grip = false;
+    let trigger = false;
+    if (source.gamepad) {
+      trigger = source.gamepad.buttons[0]?.pressed || false;
+      grip = source.gamepad.buttons[1]?.pressed || false;
+    }
+
+    // UI 업데이트
+    document.getElementById('vr-pos').textContent =
+      `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
+    document.getElementById('grip-status').textContent =
+      grip ? '🟢 누름' : '⚪ 해제';
+
+    // 서버로 전송 (오른손 우선)
+    if (source.handedness === 'right' || xrSession.inputSources.length === 1) {
+      sendPose(source.handedness || 'right', pos, ori, grip, trigger);
+      break;  // 한 손만 전송
+    }
+  }
+}
+
+// ──────────────────────────────────────────
+//  초기화
+// ──────────────────────────────────────────
+connectWS();
+</script>
+</body>
+</html>
