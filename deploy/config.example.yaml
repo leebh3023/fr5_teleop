@@ -26,7 +26,7 @@ timing:
   servo_period_s: 0.008
   servo_transition_window_s: 1.0
   servo_transition_limit: 4
-  pose_timeout_s: 0.100
+  pose_timeout_s: 0.200
   worker_watchdog_s: 0.500
   worker_startup_timeout_s: 10.0
   graceful_shutdown_s: 2.0
@@ -35,9 +35,23 @@ motion:
   # Conservative commissioning defaults. Increase only after recorded testing.
   position_scale: 100.0
   ema_alpha: 0.25
+  max_velocity_mm_s: 31.25
   max_step_mm: 0.25
   # Replace these with a measured base-frame envelope around the initial TCP.
   workspace:
     x: [-600.0, 600.0]
     y: [-600.0, 600.0]
     z: [50.0, 700.0]
+
+gripper:
+  enabled: false
+  index: 1
+  activate_on_start: false
+  initially_closed: false
+  open_position: 0
+  closed_position: 100
+  velocity: 30
+  force: 30
+  command_max_time_ms: 3000
+  action_timeout_s: 5.0
+  poll_period_s: 0.050

@@ -4,7 +4,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 
-from teleop.config import TeleopConfig
+from teleop.config import GripperConfig, TeleopConfig
 from teleop.protocol import PoseMessage
 from teleop.robot.fake_client import FakeRobotBehavior
 from teleop.robot.state import ControlCommand, WorkerState
@@ -24,7 +24,13 @@ def make_config() -> TeleopConfig:
     )
 
 
-def pose(seq: int, grip: bool, x: float = 0.0) -> PoseMessage:
+def pose(
+    seq: int,
+    grip: bool,
+    x: float = 0.0,
+    *,
+    trigger: bool = False,
+) -> PoseMessage:
     return PoseMessage(
         session_id="test",
         seq=seq,
@@ -33,7 +39,7 @@ def pose(seq: int, grip: bool, x: float = 0.0) -> PoseMessage:
         position_m=(x, 1.0, 0.0),
         orientation_xyzw=(0.0, 0.0, 0.0, 1.0),
         grip=grip,
-        trigger=False,
+        trigger=trigger,
         received_ns=time.monotonic_ns(),
     )
 
@@ -226,3 +232,138 @@ def test_hung_sdk_call_is_contained_by_process_termination() -> None:
         report = supervisor.shutdown()
     assert not report.graceful
     assert report.terminated or report.killed
+
+
+def test_trigger_action_stops_servo_and_requires_new_grip_edge() -> None:
+    config = replace(
+        make_config(),
+        pose_timeout_s=0.500,
+        gripper=GripperConfig(
+            enabled=True,
+            command_max_time_ms=100,
+            action_timeout_s=0.500,
+            poll_period_s=0.010,
+        ),
+    )
+    supervisor = RobotSupervisor(
+        config,
+        fake_behavior=FakeRobotBehavior(gripper_motion_s=0.080),
+    )
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        time.sleep(0.03)
+        supervisor.publish_pose(pose(2, True))
+        wait_for_state(supervisor, WorkerState.ACTIVE)
+
+        supervisor.publish_pose(pose(3, True, trigger=True))
+        action = wait_for_state(supervisor, WorkerState.GRIPPER_ACTION)
+        assert action.gripper_busy
+        assert action.rearm_required
+        assert action.counters.servo_start_count == 1
+        assert action.counters.servo_end_count == 1
+
+        # Keeping grip held must not restart ServoMove after the gripper
+        # completes. The trigger release is independently preserved.
+        supervisor.publish_pose(pose(4, True, trigger=False))
+        sleeping = wait_for_status(
+            supervisor,
+            lambda status: (
+                status.state == WorkerState.SLEEPING
+                and status.counters.gripper_complete_count == 1
+            ),
+        )
+        assert sleeping.rearm_required
+        assert sleeping.counters.servo_start_count == 1
+
+        supervisor.publish_pose(pose(5, True))
+        time.sleep(0.05)
+        statuses = supervisor.drain_status()
+        assert all(status.state != WorkerState.ACTIVE for status in statuses)
+
+        supervisor.publish_pose(pose(6, False))
+        wait_for_status(
+            supervisor,
+            lambda status: (
+                status.state == WorkerState.SLEEPING
+                and not status.rearm_required
+            ),
+        )
+        supervisor.publish_pose(pose(7, True))
+        resumed = wait_for_state(supervisor, WorkerState.ACTIVE)
+        assert resumed.counters.servo_start_count == 2
+        assert resumed.counters.servo_end_count == 1
+    finally:
+        supervisor.shutdown()
+
+
+def test_trigger_edges_survive_pose_overwrite() -> None:
+    config = replace(
+        make_config(),
+        servo_period_s=0.050,
+        pose_timeout_s=0.500,
+        worker_watchdog_s=1.000,
+        gripper=GripperConfig(
+            enabled=True,
+            command_max_time_ms=100,
+            action_timeout_s=0.500,
+            poll_period_s=0.010,
+        ),
+    )
+    supervisor = RobotSupervisor(config)
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        supervisor.publish_pose(pose(2, True))
+        wait_for_state(supervisor, WorkerState.ACTIVE)
+
+        # The latest mailbox snapshot ends with trigger=False, but the
+        # trigger rising edge remains ordered on the control pipe.
+        supervisor.publish_pose(pose(3, True, trigger=True))
+        supervisor.publish_pose(pose(4, True, trigger=False))
+        completed = wait_for_status(
+            supervisor,
+            lambda status: (
+                status.state == WorkerState.SLEEPING
+                and status.counters.gripper_complete_count == 1
+            ),
+        )
+        assert completed.counters.gripper_command_count == 1
+        assert completed.counters.servo_end_count == 1
+    finally:
+        supervisor.shutdown()
+
+
+def test_gripper_fault_is_latched_without_servo_restart() -> None:
+    config = replace(
+        make_config(),
+        pose_timeout_s=0.500,
+        gripper=GripperConfig(
+            enabled=True,
+            command_max_time_ms=100,
+            action_timeout_s=0.500,
+            poll_period_s=0.010,
+        ),
+    )
+    supervisor = RobotSupervisor(
+        config,
+        fake_behavior=FakeRobotBehavior(gripper_fault=1),
+    )
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        time.sleep(0.03)
+        supervisor.publish_pose(pose(2, True))
+        wait_for_state(supervisor, WorkerState.ACTIVE)
+        supervisor.publish_pose(pose(3, True, trigger=True))
+
+        fault = wait_for_state(supervisor, WorkerState.FAULT)
+        assert fault.reason == "gripper_fault"
+        assert fault.counters.servo_start_count == 1
+        assert fault.counters.servo_end_count == 1
+        assert fault.counters.gripper_complete_count == 0
+    finally:
+        supervisor.shutdown()

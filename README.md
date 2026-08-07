@@ -2,7 +2,9 @@
 
 Meta Quest 3의 WebXR controller pose를 받아 Fairino FR5의 Cartesian servo target으로 변환하는 Ubuntu 22.04용 teleoperation bridge다.
 
-현재 릴리즈 후보는 `0.2.0rc2`다. 자동 검증 범위와 stable release 전에
+현재 패키지 버전은 `0.2.0rc2`이며, 저장소에는 현장 피드백을 반영한
+다음 release candidate용 변경이 `Unreleased`로 누적되어 있다.
+자동 검증 범위와 stable release 전에
 필요한 실제 장비 검증은 `RELEASE_CHECKLIST.md`에 구분되어 있다.
 운영 배포 단위는 source distribution을 풀어 설치하는 native
 venv+systemd 구성이다. wheel은 Python service 코드만 제공하며 별도
@@ -88,6 +90,10 @@ robot:
   sdk_path: fairino-python-sdk-main/linux
 motion:
   position_scale: 500.0
+  max_velocity_mm_s: 50.0
+  max_step_mm: 0.75
+gripper:
+  enabled: false
 ```
 
 `timing.servo_transition_window_s` 안에
@@ -154,6 +160,20 @@ pose는 최신 snapshot만 유지하지만 grip press/release 전환은 별도�
 비손실 control pipe로 전달한다. 두 전환이 한 worker tick 안에 연속
 도착해도 release edge가 최신 pose에 덮어써지지 않는다. stale timeout
 뒤에는 UI의 재무장 안내에 따라 grip을 완전히 놓았다 다시 누른다.
+
+## Trigger/gripper behavior
+
+그리퍼는 기본 비활성이다. controller-side gripper 설정과 수동 저위험
+검증을 마친 뒤 `gripper.enabled: true`로 켠다. ACTIVE 상태에서
+trigger rising edge가 들어오면 worker는 먼저 `ServoMoveEnd()`로
+Cartesian servo를 종료하고 non-blocking `MoveGripper`를 보낸다.
+고정 sleep 대신 `GetGripperMotionDone()`을 polling하며, 완료 후에는
+자동으로 servo를 재시작하지 않는다. 작업자는 완료 후 grip을 완전히
+놓았다 다시 눌러야 한다.
+
+grip과 trigger transition은 모두 latest-pose mailbox와 별도의 비손실
+control pipe로 전달된다. WebXR UI에는 `GRIPPER_ACTION`, 그리퍼 목표
+위치와 재무장 요구가 표시된다.
 
 ## WSL
 

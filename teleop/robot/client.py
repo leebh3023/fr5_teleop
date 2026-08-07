@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from teleop.control_math import TcpPose
@@ -18,6 +19,12 @@ class RobotClientError(RuntimeError):
         super().__init__(message)
 
 
+@dataclass(frozen=True)
+class GripperMotionState:
+    fault: int
+    done: bool
+
+
 class RobotClient(Protocol):
     def connect(self) -> None: ...
 
@@ -30,6 +37,12 @@ class RobotClient(Protocol):
     def servo_cart(self, target: TcpPose) -> None: ...
 
     def servo_end(self) -> None: ...
+
+    def activate_gripper(self) -> None: ...
+
+    def move_gripper(self, position: int) -> None: ...
+
+    def get_gripper_motion_state(self) -> GripperMotionState: ...
 
     def reset_fault(self) -> None: ...
 

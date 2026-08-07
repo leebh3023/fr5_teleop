@@ -26,7 +26,7 @@ timing:
   # ERROR log after this many start/end events occur inside the window.
   servo_transition_window_s: 1.0
   servo_transition_limit: 4
-  pose_timeout_s: 0.100
+  pose_timeout_s: 0.200
   worker_watchdog_s: 0.500
   worker_startup_timeout_s: 10.0
   graceful_shutdown_s: 2.0
@@ -34,8 +34,25 @@ timing:
 motion:
   position_scale: 500.0
   ema_alpha: 0.25
-  max_step_mm: 1.5
+  # Time-based speed limit. max_step_mm remains a per-command safety cap.
+  max_velocity_mm_s: 50.0
+  max_step_mm: 0.75
   workspace:
     x: [-600.0, 600.0]
     y: [-600.0, 600.0]
     z: [50.0, 700.0]
+
+# Disabled by default. Enable only after controller-side gripper configuration
+# and a low-risk trigger/gripper commissioning test.
+gripper:
+  enabled: false
+  index: 1
+  activate_on_start: false
+  initially_closed: false
+  open_position: 0
+  closed_position: 100
+  velocity: 50
+  force: 50
+  command_max_time_ms: 3000
+  action_timeout_s: 5.0
+  poll_period_s: 0.050

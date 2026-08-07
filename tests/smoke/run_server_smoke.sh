@@ -5,7 +5,13 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PORT="${TELEOP_SMOKE_PORT:-18443}"
 LOG_FILE="${TELEOP_SMOKE_LOG:-/var/tmp/vr-teleop-server-smoke.log}"
 READY_FILE="/var/tmp/vr-teleop-ready-$$.json"
-PYTHON_BIN="${TELEOP_PYTHON:-python3}"
+if [[ -n "${TELEOP_PYTHON:-}" ]]; then
+    PYTHON_BIN="${TELEOP_PYTHON}"
+elif [[ -x "${PROJECT_DIR}/.venv-linux/bin/python" ]]; then
+    PYTHON_BIN="${PROJECT_DIR}/.venv-linux/bin/python"
+else
+    PYTHON_BIN="python3"
+fi
 
 cd "${PROJECT_DIR}"
 "${PYTHON_BIN}" -m teleop --no-tls --host 127.0.0.1 --port "${PORT}" >"${LOG_FILE}" 2>&1 &

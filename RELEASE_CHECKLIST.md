@@ -38,3 +38,19 @@ WebXR static files and the FAIRINO SDK are external runtime resources.
 
 WSL and fake tests do not authorize actual robot operation. Stable release approval
 requires recorded native timing and supervised hardware results.
+
+## Unreleased next-RC validation
+
+- [x] grip과 trigger transition의 lossless control-pipe 회귀 시험
+- [x] `GRIPPER_ACTION`의 servo end, non-blocking command, completion,
+  latched fault와 완료 후 re-clutch 시험
+- [x] legacy/extended/ambiguous SDK signature adapter 시험
+- [x] elapsed-time velocity limiter와 absolute step cap unit 시험
+- [x] SDK operation별 p50/p95/p99/max 로그 집계 시험
+- [x] Ubuntu 22.04 WSL 전체 suite: 51 passed
+- [x] Ubuntu 22.04 WSL dry-run server smoke
+- [ ] 실제 SDK V2.0.8에서 gripper signature와 completion 반환 기록
+- [ ] 실제 FR5에서 trigger 20회 command/complete count 대조
+- [ ] 그리퍼 완료 후 grip 유지 시 servo가 자동 재개되지 않음을 확인
+- [ ] 실제 로봇 10분 timing/pose-gap/SDK-latency 로그 검토
+- [ ] 새 release candidate 버전, bundle, checksum과 현장 매뉴얼 생성

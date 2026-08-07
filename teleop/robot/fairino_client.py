@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 import logging
 import platform
 import sys
@@ -9,7 +10,7 @@ from typing import Any
 
 from teleop.config import TeleopConfig
 from teleop.control_math import TcpPose
-from teleop.robot.client import RobotClientError
+from teleop.robot.client import GripperMotionState, RobotClientError
 
 
 log = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ class FairinoRobotClient:
         self._robot_module: Any = None
         self._robot: Any = None
         self._servo_cart_supports_exaxis: bool | None = None
+        self._move_gripper_supports_extended_args: bool | None = None
 
     @staticmethod
     def _code(result: Any, operation: str) -> int:
@@ -44,6 +46,86 @@ class FairinoRobotClient:
             raise RobotClientError(operation, None, "robot is not connected")
         method = getattr(self._robot, operation)
         self._expect_zero(method(*args, **kwargs), operation)
+
+    def _method_parameters(self, operation: str) -> set[str]:
+        if self._robot is None:
+            raise RobotClientError(operation, None, "robot is not connected")
+        method = getattr(self._robot, operation, None)
+        if method is None:
+            raise RobotClientError(operation, None, "SDK method is unavailable")
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError) as exc:
+            raise RobotClientError(
+                operation,
+                None,
+                "cannot inspect SDK signature safely",
+            ) from exc
+        if any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        ):
+            raise RobotClientError(
+                operation,
+                None,
+                "ambiguous SDK **kwargs signature",
+            )
+        log.info("Fairino SDK signature operation=%s signature=%s", operation, signature)
+        return set(signature.parameters)
+
+    def _inspect_sdk_signatures(self) -> None:
+        servo_parameters = self._method_parameters("ServoCart")
+        servo_required = {
+            "mode",
+            "desc_pos",
+            "pos_gain",
+            "acc",
+            "vel",
+            "cmdT",
+            "filterT",
+            "gain",
+        }
+        missing_servo = servo_required - servo_parameters
+        if missing_servo:
+            raise RobotClientError(
+                "ServoCart",
+                None,
+                "unsupported SDK signature; missing parameters: "
+                + ", ".join(sorted(missing_servo)),
+            )
+        self._servo_cart_supports_exaxis = "exaxis" in servo_parameters
+
+        if not self.config.gripper.enabled:
+            return
+        gripper_parameters = self._method_parameters("MoveGripper")
+        gripper_required = {
+            "index",
+            "pos",
+            "vel",
+            "force",
+            "maxtime",
+            "block",
+        }
+        missing_gripper = gripper_required - gripper_parameters
+        if missing_gripper:
+            raise RobotClientError(
+                "MoveGripper",
+                None,
+                "unsupported SDK signature; missing parameters: "
+                + ", ".join(sorted(missing_gripper)),
+            )
+        extended = {"type", "rotNum", "rotVel", "rotTorque"}
+        present = extended.intersection(gripper_parameters)
+        if present and present != extended:
+            raise RobotClientError(
+                "MoveGripper",
+                None,
+                "partially supported extended gripper signature",
+            )
+        self._move_gripper_supports_extended_args = present == extended
+        self._method_parameters("GetGripperMotionDone")
+        if self.config.gripper.activate_on_start:
+            self._method_parameters("ActGripper")
 
     @staticmethod
     def _connection_state(rpc_type: Any) -> bool | None:
@@ -71,6 +153,7 @@ class FairinoRobotClient:
 
         self._robot_module = importlib.import_module("fairino.Robot")
         self._robot = self._robot_module.RPC(self.config.robot_ip)
+        self._inspect_sdk_signatures()
         connection_state = self._connection_state(self._robot_module.RPC)
         if connection_state is False:
             raise RobotClientError(
@@ -93,6 +176,8 @@ class FairinoRobotClient:
         self._call_zero("Mode", 0)
         self._call_zero("DragTeachSwitch", 0)
         self._call_zero("RobotEnable", 1)
+        if self.config.gripper.enabled and self.config.gripper.activate_on_start:
+            self.activate_gripper()
 
     def get_current_tcp(self) -> TcpPose:
         if self._robot is None:
@@ -131,30 +216,89 @@ class FairinoRobotClient:
             "filterT": 0.0,
             "gain": 0.0,
         }
-        if self._servo_cart_supports_exaxis is not False:
-            try:
-                result = self._robot.ServoCart(
-                    **arguments,
-                    exaxis=list(self.config.exaxis_default),
-                )
-                self._servo_cart_supports_exaxis = True
-            except TypeError as exc:
-                if "unexpected keyword argument 'exaxis'" not in str(exc):
-                    raise RobotClientError(
-                        "ServoCart", None, f"SDK signature error: {exc}"
-                    ) from exc
-                self._servo_cart_supports_exaxis = False
-                log.warning(
-                    "Fairino SDK ServoCart has no exaxis parameter; "
-                    "using legacy signature"
-                )
-                result = self._robot.ServoCart(**arguments)
-        else:
-            result = self._robot.ServoCart(**arguments)
+        if self._servo_cart_supports_exaxis is None:
+            raise RobotClientError(
+                "ServoCart",
+                None,
+                "SDK signature was not inspected during connect",
+            )
+        if self._servo_cart_supports_exaxis:
+            arguments["exaxis"] = list(self.config.exaxis_default)
+        result = self._robot.ServoCart(**arguments)
         self._expect_zero(result, "ServoCart")
 
     def servo_end(self) -> None:
         self._call_zero("ServoMoveEnd")
+
+    def activate_gripper(self) -> None:
+        self._call_zero("ActGripper", self.config.gripper.index, 1)
+
+    def move_gripper(self, position: int) -> None:
+        if self._robot is None:
+            raise RobotClientError("MoveGripper", None, "robot is not connected")
+        if self._move_gripper_supports_extended_args is None:
+            raise RobotClientError(
+                "MoveGripper",
+                None,
+                "gripper SDK signature was not inspected during connect",
+            )
+        arguments: dict[str, Any] = {
+            "index": self.config.gripper.index,
+            "pos": position,
+            "vel": self.config.gripper.velocity,
+            "force": self.config.gripper.force,
+            "maxtime": self.config.gripper.command_max_time_ms,
+            "block": 1,
+        }
+        if self._move_gripper_supports_extended_args:
+            arguments.update(
+                {
+                    "type": 0,
+                    "rotNum": 0.0,
+                    "rotVel": 0,
+                    "rotTorque": 0,
+                }
+            )
+        self._expect_zero(self._robot.MoveGripper(**arguments), "MoveGripper")
+
+    def get_gripper_motion_state(self) -> GripperMotionState:
+        if self._robot is None:
+            raise RobotClientError(
+                "GetGripperMotionDone",
+                None,
+                "robot is not connected",
+            )
+        result = self._robot.GetGripperMotionDone()
+        code = self._code(result, "GetGripperMotionDone")
+        if code != 0:
+            raise RobotClientError("GetGripperMotionDone", code)
+        if (
+            isinstance(result, (tuple, list))
+            and len(result) >= 2
+            and isinstance(result[1], (tuple, list))
+            and len(result[1]) >= 2
+        ):
+            fault, done = result[1][0], result[1][1]
+        elif isinstance(result, (tuple, list)) and len(result) >= 3:
+            fault, done = result[1], result[2]
+        else:
+            raise RobotClientError(
+                "GetGripperMotionDone",
+                None,
+                f"unexpected SDK result: {result!r}",
+            )
+        if (
+            isinstance(fault, bool)
+            or not isinstance(fault, int)
+            or isinstance(done, bool)
+            or not isinstance(done, int)
+        ):
+            raise RobotClientError(
+                "GetGripperMotionDone",
+                None,
+                f"unexpected SDK result: {result!r}",
+            )
+        return GripperMotionState(fault=fault, done=done == 1)
 
     def reset_fault(self) -> None:
         self._call_zero("ResetAllError")

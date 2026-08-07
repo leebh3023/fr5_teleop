@@ -64,7 +64,10 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
             )
             control = await receive_type(ws, "control")
             assert control["granted"] is True
-            await receive_state(ws, "IDLE")
+            idle = await receive_state(ws, "IDLE")
+            assert idle["gripper_enabled"] is False
+            assert idle["gripper_busy"] is False
+            assert idle["gripper_position"] == 0
 
             def pose(seq: int, grip: bool, x: float = 0.0) -> dict:
                 return {

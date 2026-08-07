@@ -3,6 +3,51 @@
 이 프로젝트는 Semantic Versioning을 따르며, 실제 로봇 검증 전 빌드는
 release candidate로 표시한다.
 
+## [Unreleased]
+
+### Added
+
+- optional trigger-controlled gripper configuration and explicit
+  `GRIPPER_ACTION` worker state
+- lossless trigger press/release IPC, gripper completion polling and
+  command/complete counters
+- time-based `max_velocity_mm_s` limiter combined with the absolute
+  per-command `max_step_mm` cap
+- worker state transition에 PID/generation, stop reason, rearm 상태,
+  servo lifecycle count와 마지막 SDK 작업을 포함한 진단 로그
+- 느린 SDK 호출과 servo deadline miss의 1초 rate-limited 요약
+- SDK operation별 10초 `p50/p95/p99/max` 호출 시간 요약
+- startup/servo/gripper/reset/close fault의 exception type과 traceback
+- Quest client-time과 서버 수신 시간을 분리한 pose stream gap 및
+  10초 summary 로그
+- WebSocket controller lifecycle과 rate-limited protocol 오류 로그
+- rc2 현장 사본에 안전하게 적용할 수 있는 `rc2-hf1` Bash 핫픽스와
+  한글 적용·rollback·진단 문서
+
+### Changed
+
+- worker lifecycle와 timing 진단을 `RobotWorkerRuntime`과
+  `WorkerDiagnostics`로 분리해 상태 전이와 로그 집계 책임을 명확화
+- `ServoCart`/`MoveGripper` signature를 connect 시 한 번 검사하며
+  motion RPC trial call을 사용하지 않음
+- 그리퍼 명령은 non-blocking으로 접수하고 고정 sleep 대신
+  `GetGripperMotionDone`을 polling
+- pose mailbox snapshot을 읽은 뒤 monotonic clock을 다시 읽어, parent가
+  동시에 게시한 최신 pose timestamp가 worker의 오래된 tick timestamp보다
+  새로워지는 경쟁 조건 제거
+- 브라우저 backpressure로 폐기한 pose도 sequence를 소비해 다음 정상
+  메시지에서 server가 누락 frame 수를 진단
+- 로그 형식에 process PID를 추가하고 pose 전체 좌표는 기록하지 않음
+
+### Fixed
+
+- trigger 그리퍼 동작 중 worker를 고정 sleep으로 막아 watchdog/stale
+  판정과 servo lifecycle이 꼬이던 현장 임시 구현 제거
+- 그리퍼 완료 직후 grip을 계속 누른 상태에서 ServoMoveStart가 자동
+  재호출될 수 있던 재무장 경로 차단
+- trigger transition이 latest-pose overwrite에 유실될 수 있던 문제
+- SDK V2.0.8/신형 SDK의 서로 다른 `MoveGripper` signature 호환
+
 ## [0.2.0rc2] - 2026-08-06
 
 ### Fixed

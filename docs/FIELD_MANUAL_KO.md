@@ -4,6 +4,10 @@
 이 문서는 릴리즈 후보 `0.2.0rc2`의 설치, dry-run 확인, 실제 로봇
 commissioning과 종료 절차를 설명한다.
 
+> 저장소의 `Unreleased` 변경에는 rc2 현장 피드백에 따른 trigger/gripper
+> 상태 머신과 추가 진단이 포함되어 있다. 새 release bundle이 만들어지기
+> 전에는 이 문서의 rc2 파일명과 새 소스 동작을 혼합해 배포하지 않는다.
+
 > 경고: 이 프로그램의 grip과 pose timeout은 운용 보조 기능이며
 > 안전 인증 정지 장치가 아니다. 물리적 비상 정지 장치, FAIRINO
 > 제어기의 안전 설정과 현장 위험성 평가를 대체하지 않는다. 최초 실제
@@ -14,8 +18,9 @@ commissioning과 종료 절차를 설명한다.
 - 이 빌드는 stable이 아닌 release candidate다.
 - Ubuntu 22.04 WSL의 fake robot 자동 테스트는 통과했지만 실제 FR5,
   Quest 3, native systemd 조합은 현장에서 확인해야 한다.
-- 컨트롤러 위치만 로봇 TCP 위치에 반영한다. 손목 회전과 trigger 입력은
-  현재 로봇 제어에 사용하지 않는다.
+- 컨트롤러 위치만 로봇 TCP 위치에 반영하며 손목 회전은 사용하지 않는다.
+  Unreleased 소스의 trigger/gripper 기능은 기본 비활성이며 별도
+  commissioning 뒤에만 활성화한다.
 - 한 번에 WebXR client 한 대만 제어권을 갖는다.
 - vendor source의 보고 버전과 README 기록은 서로 다를 수 있다. 현장
   controller firmware와 정확히 짝이 맞는 공식 SDK를 별도 준비해
@@ -259,10 +264,12 @@ sudoedit /etc/vr-teleop/config.yaml
 | `tls.cert_path`, `key_path` | 인증서와 개인 키 | `/etc/vr-teleop/tls/...` |
 | `robot.ip` | FR5 controller 주소 | 현장 확인값 |
 | `robot.sdk_path` | firmware 일치 Linux SDK | 현장 SDK 절대 경로 |
-| `timing.pose_timeout_s` | pose 무수신 정지 시간 | `0.100` 유지 |
+| `timing.pose_timeout_s` | pose 무수신 정지 시간 | `0.200`에서 검증 시작 |
 | `motion.position_scale` | VR 1 m당 로봇 이동 mm | 최초 `100.0` |
+| `motion.max_velocity_mm_s` | 실제 경과 시간 기준 TCP 명령 속도 상한 | 최초 `31.25` |
 | `motion.max_step_mm` | 8 ms tick당 최대 이동 | 최초 `0.25` |
 | `motion.workspace` | base 좌표계 TCP 경계 mm | 현재 TCP 주변으로 축소 |
+| `gripper.enabled` | trigger 그리퍼 제어 | 최초 `false` |
 
 최초 실제 로봇용 예시:
 
@@ -294,7 +301,7 @@ timing:
   servo_period_s: 0.008
   servo_transition_window_s: 1.0
   servo_transition_limit: 4
-  pose_timeout_s: 0.100
+  pose_timeout_s: 0.200
   worker_watchdog_s: 0.500
   worker_startup_timeout_s: 10.0
   graceful_shutdown_s: 2.0
@@ -302,16 +309,31 @@ timing:
 motion:
   position_scale: 100.0
   ema_alpha: 0.25
+  max_velocity_mm_s: 31.25
   max_step_mm: 0.25
   workspace:
     x: [300.0, 400.0]
     y: [-50.0, 50.0]
     z: [300.0, 400.0]
+
+gripper:
+  enabled: false
+  index: 1
+  activate_on_start: false
+  initially_closed: false
+  open_position: 0
+  closed_position: 100
+  velocity: 30
+  force: 30
+  command_max_time_ms: 3000
+  action_timeout_s: 5.0
+  poll_period_s: 0.050
 ```
 
 위 workspace 숫자는 형식 예시일 뿐이다. 현장 TCP를 측정하지 않고
-복사해서 사용하지 않는다. `max_step_mm: 0.25`의 이론상 위치 명령
-상한은 8 ms 주기에서 약 31.25 mm/s다.
+복사해서 사용하지 않는다. `max_velocity_mm_s: 31.25`가 시간 기준
+속도를 제한하고 `max_step_mm: 0.25`는 단일 명령의 절대 상한으로
+추가 적용된다. 지연 뒤 밀린 이동량을 한 번에 보정하지 않는다.
 
 좌표 매핑은 다음과 같다.
 
@@ -509,7 +531,14 @@ systemd 운용:
 
 ```bash
 sudo journalctl -u vr-teleop --since "10 minutes ago" \
-  --no-pager > vr-teleop-field.log
+  --no-pager -o short-iso > vr-teleop-field.log
+```
+
+직접 실행한 경우에는 stderr를 포함한다.
+
+```bash
+.venv/bin/python -m teleop --config config.yaml --confirm-hardware \
+  2>&1 | tee "vr-teleop-$(date +%Y%m%d-%H%M%S).log"
 ```
 
 다음 정보와 함께 릴리즈 담당자에게 전달한다.
@@ -521,6 +550,15 @@ sudo journalctl -u vr-teleop --since "10 minutes ago" \
 - Quest OS/Browser version
 - 재현 시각, worker state, grip 상태
 - E-stop 사용 여부와 실제 정지 결과
+
+진단 로그에서 다음 항목을 함께 확인한다.
+
+- `pose stream gap/summary`: Quest client-time 간격과 서버 수신 간격
+  (`missing_sequences`는 브라우저 backpressure drop 포함)
+- `pose timeout stopping servo`: timeout 당시 sequence와 input age
+- `slow SDK call summary`: 작업명별 느린 호출
+- `servo deadline miss summary`: missed tick과 최대 overrun
+- `worker state`: start/cart/end 누계와 state transition reason
 
 pose 원본을 매 frame 수집하거나 외부에 공개하지 않는다.
 

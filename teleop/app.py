@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,80 @@ from teleop.robot.supervisor import RobotSupervisor
 log = logging.getLogger(__name__)
 
 
+@dataclass
+class PoseStreamDiagnostics:
+    last_seq: int | None = None
+    last_received_ns: int | None = None
+    last_client_time_ms: float | None = None
+    window_started_ns: int | None = None
+    sample_count: int = 0
+    missing_sequence_count: int = 0
+    max_receive_gap_ms: float = 0.0
+    max_client_gap_ms: float = 0.0
+    last_warning_ns: int = 0
+    suppressed_warning_count: int = 0
+
+    def observe(
+        self,
+        message: PoseMessage,
+    ) -> tuple[float | None, float | None, int]:
+        receive_gap_ms = None
+        client_gap_ms = None
+        missing_sequences = 0
+        if self.last_received_ns is not None:
+            receive_gap_ms = max(
+                0.0,
+                (message.received_ns - self.last_received_ns) / 1_000_000,
+            )
+            self.max_receive_gap_ms = max(
+                self.max_receive_gap_ms,
+                receive_gap_ms,
+            )
+        if self.last_client_time_ms is not None:
+            client_gap_ms = max(
+                0.0,
+                message.client_time_ms - self.last_client_time_ms,
+            )
+            self.max_client_gap_ms = max(self.max_client_gap_ms, client_gap_ms)
+        if self.last_seq is not None:
+            missing_sequences = max(0, message.seq - self.last_seq - 1)
+            self.missing_sequence_count += missing_sequences
+
+        if self.window_started_ns is None:
+            self.window_started_ns = message.received_ns
+        self.sample_count += 1
+        self.last_seq = message.seq
+        self.last_received_ns = message.received_ns
+        self.last_client_time_ms = message.client_time_ms
+        return receive_gap_ms, client_gap_ms, missing_sequences
+
+    def take_summary(
+        self,
+        now_ns: int,
+        *,
+        force: bool = False,
+        interval_ns: int = 10_000_000_000,
+    ) -> dict[str, int | float] | None:
+        if self.window_started_ns is None or self.sample_count == 0:
+            return None
+        if not force and now_ns - self.window_started_ns < interval_ns:
+            return None
+        duration_ms = max(0.0, (now_ns - self.window_started_ns) / 1_000_000)
+        summary: dict[str, int | float] = {
+            "samples": self.sample_count,
+            "missing_sequences": self.missing_sequence_count,
+            "max_receive_gap_ms": self.max_receive_gap_ms,
+            "max_client_gap_ms": self.max_client_gap_ms,
+            "window_ms": duration_ms,
+        }
+        self.window_started_ns = now_ns
+        self.sample_count = 0
+        self.missing_sequence_count = 0
+        self.max_receive_gap_ms = 0.0
+        self.max_client_gap_ms = 0.0
+        return summary
+
+
 class TeleopRuntime:
     def __init__(self, config: TeleopConfig) -> None:
         self.config = config
@@ -36,6 +111,7 @@ class TeleopRuntime:
         self.status_task: asyncio.Task[None] | None = None
         self.supervisor_fault: str | None = None
         self._watchdog_handled = False
+        self._pose_diagnostics: dict[str, PoseStreamDiagnostics] = {}
 
     async def start(self) -> None:
         self.supervisor.start()
@@ -55,12 +131,95 @@ class TeleopRuntime:
 
     async def register(self, session_id: str, ws: web.WebSocketResponse) -> None:
         self.clients[session_id] = ws
+        log.info(
+            "WebSocket connected session=%s clients=%d",
+            session_id[:8],
+            len(self.clients),
+        )
 
     async def unregister(self, session_id: str) -> None:
         self.clients.pop(session_id, None)
+        diagnostics = self._pose_diagnostics.pop(session_id, None)
+        if diagnostics is not None:
+            summary = diagnostics.take_summary(time.monotonic_ns(), force=True)
+            if summary is not None:
+                log.info(
+                    "pose stream final session=%s samples=%d missing_sequences=%d "
+                    "max_receive_gap_ms=%.1f max_client_gap_ms=%.1f window_ms=%.1f",
+                    session_id[:8],
+                    summary["samples"],
+                    summary["missing_sequences"],
+                    summary["max_receive_gap_ms"],
+                    summary["max_client_gap_ms"],
+                    summary["window_ms"],
+                )
         if self.lease.release(session_id):
             self.supervisor.invalidate_pose()
             self.supervisor.send_control(ControlCommand.SESSION_LOST)
+
+    def record_pose_diagnostics(self, message: PoseMessage) -> None:
+        diagnostics = self._pose_diagnostics.setdefault(
+            message.session_id,
+            PoseStreamDiagnostics(),
+        )
+        receive_gap_ms, client_gap_ms, missing_sequences = diagnostics.observe(
+            message
+        )
+        warning_threshold_ms = max(50.0, self.config.pose_timeout_s * 500)
+        gap_detected = (
+            missing_sequences > 0
+            or (
+                receive_gap_ms is not None
+                and receive_gap_ms >= warning_threshold_ms
+            )
+            or (
+                client_gap_ms is not None
+                and client_gap_ms >= warning_threshold_ms
+            )
+        )
+        if gap_detected:
+            if (
+                diagnostics.last_warning_ns == 0
+                or message.received_ns - diagnostics.last_warning_ns
+                >= 1_000_000_000
+            ):
+                log.warning(
+                    "pose stream gap session=%s seq=%d missing_sequences=%d "
+                    "receive_gap_ms=%s client_gap_ms=%s "
+                    "warning_threshold_ms=%.1f suppressed=%d",
+                    message.session_id[:8],
+                    message.seq,
+                    missing_sequences,
+                    (
+                        f"{receive_gap_ms:.1f}"
+                        if receive_gap_ms is not None
+                        else None
+                    ),
+                    (
+                        f"{client_gap_ms:.1f}"
+                        if client_gap_ms is not None
+                        else None
+                    ),
+                    warning_threshold_ms,
+                    diagnostics.suppressed_warning_count,
+                )
+                diagnostics.last_warning_ns = message.received_ns
+                diagnostics.suppressed_warning_count = 0
+            else:
+                diagnostics.suppressed_warning_count += 1
+
+        summary = diagnostics.take_summary(message.received_ns)
+        if summary is not None:
+            log.info(
+                "pose stream summary session=%s samples=%d missing_sequences=%d "
+                "max_receive_gap_ms=%.1f max_client_gap_ms=%.1f window_ms=%.1f",
+                message.session_id[:8],
+                summary["samples"],
+                summary["missing_sequences"],
+                summary["max_receive_gap_ms"],
+                summary["max_client_gap_ms"],
+                summary["window_ms"],
+            )
 
     def status_payload(self, status: WorkerStatus | None = None) -> dict[str, Any]:
         current = status or self.supervisor.latest_status
@@ -72,6 +231,13 @@ class TeleopRuntime:
                 "state": "STARTING",
                 "tracking": False,
                 "rearm_required": True,
+                "gripper_enabled": self.config.gripper.enabled,
+                "gripper_busy": False,
+                "gripper_position": (
+                    self.config.gripper.closed_position
+                    if self.config.gripper.initially_closed
+                    else self.config.gripper.open_position
+                ),
                 "controller_id": self.lease.session_id,
                 "ack_seq": self.lease.last_seq if self.lease.last_seq >= 0 else None,
                 "worker": {
@@ -181,6 +347,7 @@ async def ready_handler(request: web.Request) -> web.Response:
             WorkerState.SLEEPING,
             WorkerState.ARMING,
             WorkerState.ACTIVE,
+            WorkerState.GRIPPER_ACTION,
         }
     )
     return web.json_response(
@@ -216,6 +383,8 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     )
     await ws.send_json(runtime.status_payload())
 
+    last_protocol_warning_ns = 0
+    suppressed_protocol_warnings = 0
     try:
         async for message in ws:
             if message.type == WSMsgType.ERROR:
@@ -232,6 +401,21 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
                     raise ProtocolError("session_id does not match this connection")
                 await _handle_client_message(runtime, ws, parsed)
             except (json.JSONDecodeError, ProtocolError) as exc:
+                now_ns = time.monotonic_ns()
+                if (
+                    last_protocol_warning_ns == 0
+                    or now_ns - last_protocol_warning_ns >= 1_000_000_000
+                ):
+                    log.warning(
+                        "WebSocket protocol error session=%s error=%s suppressed=%d",
+                        session_id[:8],
+                        exc,
+                        suppressed_protocol_warnings,
+                    )
+                    last_protocol_warning_ns = now_ns
+                    suppressed_protocol_warnings = 0
+                else:
+                    suppressed_protocol_warnings += 1
                 await ws.send_json(
                     {
                         "version": PROTOCOL_VERSION,
@@ -254,6 +438,12 @@ async def _handle_client_message(
     if isinstance(message, ControlEvent):
         if message.event in {"claim_control", "webxr_started"}:
             granted = runtime.lease.claim(message.session_id)
+            log.info(
+                "controller claim session=%s event=%s granted=%s",
+                message.session_id[:8],
+                message.event,
+                granted,
+            )
             await ws.send_json(
                 {
                     "version": PROTOCOL_VERSION,
@@ -264,13 +454,24 @@ async def _handle_client_message(
             )
             return
         if message.event in {"release_control", "webxr_ended"}:
-            if runtime.lease.release(message.session_id):
+            released = runtime.lease.release(message.session_id)
+            log.info(
+                "controller release session=%s event=%s released=%s",
+                message.session_id[:8],
+                message.event,
+                released,
+            )
+            if released:
                 runtime.supervisor.invalidate_pose()
                 runtime.supervisor.send_control(ControlCommand.RELEASE)
             return
         if message.event == "fault_reset":
             if not runtime.lease.owns(message.session_id):
                 raise ProtocolError("only the controller may reset a fault")
+            log.warning(
+                "controller fault reset requested session=%s",
+                message.session_id[:8],
+            )
             runtime.supervisor.send_control(ControlCommand.FAULT_RESET)
             return
 
@@ -278,6 +479,7 @@ async def _handle_client_message(
         raise ProtocolError("this session does not own the controller lease")
     if not runtime.lease.accept_sequence(message.session_id, message.seq):
         raise ProtocolError("pose sequence must increase")
+    runtime.record_pose_diagnostics(message)
     runtime.supervisor.publish_pose(message)
 
 

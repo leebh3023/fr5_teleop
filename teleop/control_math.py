@@ -70,7 +70,12 @@ class MotionPlanner:
         self.filtered_position = None
         self.last_target = None
 
-    def target_for(self, vr_position: Vector3) -> TcpPose:
+    def target_for(
+        self,
+        vr_position: Vector3,
+        *,
+        step_limit_mm: float | None = None,
+    ) -> TcpPose:
         if (
             self.vr_origin is None
             or self.robot_origin is None
@@ -78,6 +83,20 @@ class MotionPlanner:
             or self.last_target is None
         ):
             raise RuntimeError("motion planner is not engaged")
+
+        limit_mm = (
+            self.config.max_step_mm
+            if step_limit_mm is None
+            else step_limit_mm
+        )
+        if (
+            not math.isfinite(limit_mm)
+            or limit_mm < 0
+            or limit_mm > self.config.max_step_mm
+        ):
+            raise ValueError(
+                "step_limit_mm must be finite and within max_step_mm"
+            )
 
         alpha = self.config.ema_alpha
         self.filtered_position = (
@@ -94,7 +113,7 @@ class MotionPlanner:
             previous_position,
             clamp_step(
                 _subtract(desired_position, previous_position),
-                self.config.max_step_mm,
+                limit_mm,
             ),
         )
         target: TcpPose = (

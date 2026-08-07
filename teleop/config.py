@@ -28,6 +28,48 @@ class WorkspaceBounds:
 
 
 @dataclass(frozen=True)
+class GripperConfig:
+    enabled: bool = False
+    index: int = 1
+    activate_on_start: bool = False
+    initially_closed: bool = False
+    open_position: int = 0
+    closed_position: int = 100
+    velocity: int = 50
+    force: int = 50
+    command_max_time_ms: int = 3000
+    action_timeout_s: float = 5.0
+    poll_period_s: float = 0.050
+
+    def validate(self) -> None:
+        if self.index < 1:
+            raise ValueError("gripper.index must be positive")
+        for name, value in (
+            ("open_position", self.open_position),
+            ("closed_position", self.closed_position),
+            ("velocity", self.velocity),
+            ("force", self.force),
+        ):
+            if not 0 <= value <= 100:
+                raise ValueError(f"gripper.{name} must be in [0, 100]")
+        if self.open_position == self.closed_position:
+            raise ValueError("gripper open and closed positions must differ")
+        if not 1 <= self.command_max_time_ms <= 30_000:
+            raise ValueError("gripper.command_max_time_ms must be in [1, 30000]")
+        if not isfinite(self.poll_period_s) or self.poll_period_s <= 0:
+            raise ValueError("gripper.poll_period_s must be positive")
+        if (
+            not isfinite(self.action_timeout_s)
+            or self.action_timeout_s < self.command_max_time_ms / 1000
+            or self.action_timeout_s < self.poll_period_s
+        ):
+            raise ValueError(
+                "gripper.action_timeout_s must cover command_max_time_ms "
+                "and at least one poll period"
+            )
+
+
+@dataclass(frozen=True)
 class TeleopConfig:
     log_level: str = "INFO"
     host: str = "0.0.0.0"
@@ -47,15 +89,17 @@ class TeleopConfig:
     servo_period_s: float = 0.008
     servo_transition_window_s: float = 1.0
     servo_transition_limit: int = 4
-    pose_timeout_s: float = 0.100
+    pose_timeout_s: float = 0.200
     worker_watchdog_s: float = 0.500
     worker_startup_timeout_s: float = 10.0
     graceful_shutdown_s: float = 2.0
     status_hz: float = 10.0
     position_scale: float = 500.0
     ema_alpha: float = 0.25
-    max_step_mm: float = 1.5
+    max_velocity_mm_s: float = 50.0
+    max_step_mm: float = 0.75
     workspace: WorkspaceBounds = field(default_factory=WorkspaceBounds)
+    gripper: GripperConfig = field(default_factory=GripperConfig)
     exaxis_default: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     max_ws_message_bytes: int = 4096
     allowed_origins: tuple[str, ...] = ()
@@ -104,6 +148,11 @@ class TeleopConfig:
             raise ValueError("position_scale must be positive")
         if not isfinite(self.ema_alpha) or not (0.0 < self.ema_alpha <= 1.0):
             raise ValueError("ema_alpha must be in (0, 1]")
+        if (
+            not isfinite(self.max_velocity_mm_s)
+            or self.max_velocity_mm_s <= 0
+        ):
+            raise ValueError("max_velocity_mm_s must be positive")
         if not isfinite(self.max_step_mm) or self.max_step_mm <= 0:
             raise ValueError("max_step_mm must be positive")
         if len(self.exaxis_default) != 4:
@@ -124,6 +173,7 @@ class TeleopConfig:
             if not self.tls_key_path or not self.tls_key_path.is_file():
                 raise ValueError(f"TLS key not found: {self.tls_key_path}")
         self.workspace.validate()
+        self.gripper.validate()
 
     @classmethod
     def from_yaml(cls, path: Path, *, validate: bool = True) -> TeleopConfig:
@@ -138,7 +188,7 @@ class TeleopConfig:
         root = _mapping(raw, "config")
         _reject_unknown(
             root,
-            {"runtime", "server", "tls", "robot", "timing", "motion"},
+            {"runtime", "server", "tls", "robot", "timing", "motion", "gripper"},
             "config",
         )
         runtime = _section(root, "runtime")
@@ -148,6 +198,7 @@ class TeleopConfig:
         timing = _section(root, "timing")
         motion = _section(root, "motion")
         workspace = _section(motion, "workspace")
+        gripper = _section(root, "gripper")
 
         _reject_unknown(runtime, {"dry_run", "log_level", "status_hz"}, "runtime")
         _reject_unknown(
@@ -172,10 +223,33 @@ class TeleopConfig:
         )
         _reject_unknown(
             motion,
-            {"position_scale", "ema_alpha", "max_step_mm", "workspace"},
+            {
+                "position_scale",
+                "ema_alpha",
+                "max_velocity_mm_s",
+                "max_step_mm",
+                "workspace",
+            },
             "motion",
         )
         _reject_unknown(workspace, {"x", "y", "z"}, "motion.workspace")
+        _reject_unknown(
+            gripper,
+            {
+                "enabled",
+                "index",
+                "activate_on_start",
+                "initially_closed",
+                "open_position",
+                "closed_position",
+                "velocity",
+                "force",
+                "command_max_time_ms",
+                "action_timeout_s",
+                "poll_period_s",
+            },
+            "gripper",
+        )
 
         defaults = cls()
         base_dir = config_path.parent
@@ -259,6 +333,13 @@ class TeleopConfig:
             ema_alpha=_number(
                 motion.get("ema_alpha", defaults.ema_alpha), "motion.ema_alpha"
             ),
+            max_velocity_mm_s=_number(
+                motion.get(
+                    "max_velocity_mm_s",
+                    defaults.max_velocity_mm_s,
+                ),
+                "motion.max_velocity_mm_s",
+            ),
             max_step_mm=_number(
                 motion.get("max_step_mm", defaults.max_step_mm),
                 "motion.max_step_mm",
@@ -267,6 +348,73 @@ class TeleopConfig:
                 x=_bounds(workspace.get("x", defaults.workspace.x), "motion.workspace.x"),
                 y=_bounds(workspace.get("y", defaults.workspace.y), "motion.workspace.y"),
                 z=_bounds(workspace.get("z", defaults.workspace.z), "motion.workspace.z"),
+            ),
+            gripper=GripperConfig(
+                enabled=_boolean(
+                    gripper.get("enabled", defaults.gripper.enabled),
+                    "gripper.enabled",
+                ),
+                index=_integer(
+                    gripper.get("index", defaults.gripper.index),
+                    "gripper.index",
+                ),
+                activate_on_start=_boolean(
+                    gripper.get(
+                        "activate_on_start",
+                        defaults.gripper.activate_on_start,
+                    ),
+                    "gripper.activate_on_start",
+                ),
+                initially_closed=_boolean(
+                    gripper.get(
+                        "initially_closed",
+                        defaults.gripper.initially_closed,
+                    ),
+                    "gripper.initially_closed",
+                ),
+                open_position=_integer(
+                    gripper.get(
+                        "open_position",
+                        defaults.gripper.open_position,
+                    ),
+                    "gripper.open_position",
+                ),
+                closed_position=_integer(
+                    gripper.get(
+                        "closed_position",
+                        defaults.gripper.closed_position,
+                    ),
+                    "gripper.closed_position",
+                ),
+                velocity=_integer(
+                    gripper.get("velocity", defaults.gripper.velocity),
+                    "gripper.velocity",
+                ),
+                force=_integer(
+                    gripper.get("force", defaults.gripper.force),
+                    "gripper.force",
+                ),
+                command_max_time_ms=_integer(
+                    gripper.get(
+                        "command_max_time_ms",
+                        defaults.gripper.command_max_time_ms,
+                    ),
+                    "gripper.command_max_time_ms",
+                ),
+                action_timeout_s=_number(
+                    gripper.get(
+                        "action_timeout_s",
+                        defaults.gripper.action_timeout_s,
+                    ),
+                    "gripper.action_timeout_s",
+                ),
+                poll_period_s=_number(
+                    gripper.get(
+                        "poll_period_s",
+                        defaults.gripper.poll_period_s,
+                    ),
+                    "gripper.poll_period_s",
+                ),
             ),
             exaxis_default=_four_numbers(
                 robot.get("exaxis_default", defaults.exaxis_default),

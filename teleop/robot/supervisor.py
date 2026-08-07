@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import multiprocessing
 import queue
 import time
@@ -12,6 +13,9 @@ from teleop.protocol import PoseMessage
 from teleop.robot.fake_client import FakeRobotBehavior
 from teleop.robot.state import ControlCommand, WorkerState, WorkerStatus
 from teleop.robot.worker import WorkerSpec, run_robot_worker
+
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,7 @@ class RobotSupervisor:
         self._started_ns = 0
         self.latest_status: WorkerStatus | None = None
         self._last_grip: bool | None = None
+        self._last_trigger: bool | None = None
 
     @property
     def generation(self) -> int:
@@ -62,6 +67,7 @@ class RobotSupervisor:
             raise RuntimeError("robot worker is already running")
         self._generation += 1
         self._last_grip = None
+        self._last_trigger = None
         self._ipc = create_worker_ipc(self._context)
         spec = WorkerSpec(
             generation=self._generation,
@@ -84,6 +90,12 @@ class RobotSupervisor:
         self._started_ns = time.monotonic_ns()
         self._process.start()
         self._ipc.control_receive.close()
+        log.info(
+            "robot worker started generation=%d pid=%s kind=%s",
+            self._generation,
+            self.pid,
+            self.robot_kind,
+        )
 
     def publish_pose(self, pose: PoseMessage) -> None:
         if self._ipc is None:
@@ -96,19 +108,38 @@ class RobotSupervisor:
                 else ControlCommand.GRIP_RELEASED
             )
             self._last_grip = pose.grip
+        if self._last_trigger is None or pose.trigger != self._last_trigger:
+            self.send_control(
+                ControlCommand.TRIGGER_PRESSED
+                if pose.trigger
+                else ControlCommand.TRIGGER_RELEASED
+            )
+            self._last_trigger = pose.trigger
 
     def invalidate_pose(self) -> None:
         if self._ipc is not None:
             self._ipc.mailbox.invalidate()
         self._last_grip = None
+        self._last_trigger = None
+        log.info("latest pose invalidated generation=%d", self._generation)
 
     def send_control(self, command: ControlCommand) -> None:
         if self._ipc is None:
             return
         try:
             self._ipc.control_send.send(command)
-        except (BrokenPipeError, EOFError, OSError):
-            pass
+            log.info(
+                "worker control sent generation=%d command=%s",
+                self._generation,
+                command.value,
+            )
+        except (BrokenPipeError, EOFError, OSError) as exc:
+            log.warning(
+                "worker control send failed generation=%d command=%s error=%s",
+                self._generation,
+                command.value,
+                exc,
+            )
 
     def drain_status(self) -> list[WorkerStatus]:
         if self._ipc is None:

@@ -122,6 +122,10 @@
     <span class="mono" id="grip-status">—</span>
   </div>
   <div class="status-row">
+    <span>트리거 (그리퍼)</span>
+    <span class="mono" id="trigger-status">—</span>
+  </div>
+  <div class="status-row">
     <span>추적 상태</span>
     <span class="mono" id="track-status">대기</span>
   </div>
@@ -141,11 +145,17 @@
     <span>프레임</span>
     <span class="mono" id="frame-count">0</span>
   </div>
+  <div class="status-row">
+    <span>그리퍼</span>
+    <span class="mono" id="gripper-status">비활성</span>
+  </div>
 </div>
 
 <div class="card instructions">
   <b>그립 버튼</b>을 꾹 누르면 로봇이 손을 따라갑니다.<br>
-  놓으면 정지, 다시 누르면 현재 위치에서 재시작.
+  놓으면 정지, 다시 누르면 현재 위치에서 재시작합니다.<br>
+  <b>트리거</b>는 설정된 경우 그리퍼를 전환하며, 이후 grip을 놓았다
+  다시 눌러야 로봇 추적이 재개됩니다.
 </div>
 
 <script>
@@ -227,6 +237,9 @@ function sendEvent(event) {
 
 function sendPose(hand, pos, ori, grip, trigger) {
   if (!ws || ws.readyState !== WebSocket.OPEN || !sessionId || !controllerOwned) return;
+  // 전송을 생략한 frame도 sequence를 소비해 서버가 client-side drop을
+  // pose sequence gap으로 진단할 수 있게 한다.
+  const seq = poseSeq++;
   if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
     poseDropCount += 1;
     return;
@@ -235,7 +248,7 @@ function sendPose(hand, pos, ori, grip, trigger) {
     version: 1,
     type: 'pose',
     session_id: sessionId,
-    seq: poseSeq++,
+    seq: seq,
     client_time_ms: performance.now(),
     hand: hand,
     position_m: [pos.x, pos.y, pos.z],
@@ -252,8 +265,13 @@ function updateStatusUI(data) {
   if (data.state === 'FAULT') {
     trackEl.textContent = `🔴 FAULT: ${data.fault || '알 수 없는 오류'}`;
     cardCtrl.classList.remove('tracking-active');
+  } else if (data.state === 'GRIPPER_ACTION') {
+    trackEl.textContent = '🟠 그리퍼 동작 중 — 로봇 추적 정지';
+    cardCtrl.classList.remove('tracking-active');
   } else if (data.state === 'SLEEPING') {
-    trackEl.textContent = '💤 슬립 — grip을 다시 누르면 재개';
+    trackEl.textContent = data.rearm_required
+      ? '💤 슬립 — grip을 완전히 놓았다 다시 누르세요'
+      : '💤 슬립 — grip을 다시 누르면 재개';
     cardCtrl.classList.remove('tracking-active');
   } else if (data.rearm_required) {
     trackEl.textContent = '🟡 재무장 대기 — grip을 완전히 놓았다 다시 누르세요';
@@ -273,6 +291,14 @@ function updateStatusUI(data) {
   }
   document.getElementById('frame-count').textContent =
     `${data.tick || 0} / drop ${poseDropCount}`;
+  const gripperEl = document.getElementById('gripper-status');
+  if (!data.gripper_enabled) {
+    gripperEl.textContent = '비활성';
+  } else if (data.gripper_busy) {
+    gripperEl.textContent = `동작 중 → ${data.gripper_position}%`;
+  } else {
+    gripperEl.textContent = `대기 (${data.gripper_position}%)`;
+  }
 }
 
 // ──────────────────────────────────────────
@@ -284,19 +310,28 @@ let gl = null;
 let xrSupported = false;
 let xrCheckComplete = false;
 let gripLatchedByHand = { left: false, right: false, none: false };
+let triggerLatchedByHand = { left: false, right: false, none: false };
 
-function readGripButton(button, hand) {
+function readAnalogButton(button, hand, latch) {
   const key = hand === 'left' || hand === 'right' ? hand : 'none';
   if (!button) {
-    gripLatchedByHand[key] = false;
+    latch[key] = false;
     return false;
   }
   if (button.pressed || button.value >= 0.65) {
-    gripLatchedByHand[key] = true;
+    latch[key] = true;
   } else if (button.value <= 0.35) {
-    gripLatchedByHand[key] = false;
+    latch[key] = false;
   }
-  return gripLatchedByHand[key];
+  return latch[key];
+}
+
+function readGripButton(button, hand) {
+  return readAnalogButton(button, hand, gripLatchedByHand);
+}
+
+function readTriggerButton(button, hand) {
+  return readAnalogButton(button, hand, triggerLatchedByHand);
 }
 
 const btnVR = document.getElementById('btn-vr');
@@ -360,6 +395,7 @@ async function startVR() {
     xrSession.addEventListener('end', () => {
       xrSession = null;
       gripLatchedByHand = { left: false, right: false, none: false };
+      triggerLatchedByHand = { left: false, right: false, none: false };
       document.getElementById('dot-xr').className = 'dot red';
       document.getElementById('xr-status').textContent = '종료됨';
       btnVR.textContent = '🥽 VR 세션 시작';
@@ -401,7 +437,10 @@ function onXRFrame(time, frame) {
     let grip = false;
     let trigger = false;
     if (source.gamepad) {
-      trigger = source.gamepad.buttons[0]?.pressed || false;
+      trigger = readTriggerButton(
+        source.gamepad.buttons[0],
+        source.handedness
+      );
       grip = readGripButton(source.gamepad.buttons[1], source.handedness);
     }
 
@@ -410,6 +449,8 @@ function onXRFrame(time, frame) {
       `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
     document.getElementById('grip-status').textContent =
       grip ? '🟢 누름' : '⚪ 해제';
+    document.getElementById('trigger-status').textContent =
+      trigger ? '🟠 누름' : '⚪ 해제';
 
     // 서버로 전송 (오른손 우선)
     if (source.handedness === 'right' || xrSession.inputSources.length === 1) {

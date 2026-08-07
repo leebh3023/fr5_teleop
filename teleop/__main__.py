@@ -105,7 +105,10 @@ def main(argv: list[str] | None = None) -> None:
 
     logging.basicConfig(
         level=getattr(logging, config.log_level),
-        format="%(asctime)s [%(processName)s] [%(levelname)s] %(message)s",
+        format=(
+            "%(asctime)s [pid=%(process)d] [%(processName)s] "
+            "[%(levelname)s] %(message)s"
+        ),
     )
 
     ssl_context = None

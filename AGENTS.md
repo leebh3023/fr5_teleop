@@ -67,6 +67,8 @@ Python worker는 일반 thread가 아니라 process로 둔다. 첨부 SDK의 여
 - `certs/`: 개발용 자체 서명 인증서가 로컬에 존재하지만 PEM은 Git ignore됨
 - `deploy/vr-teleop.service`: native Ubuntu systemd unit
 - `config.yaml`: dry-run 기본값과 server/robot/timing/motion/TLS 설정
+- `teleop/robot/diagnostics.py`: worker lifecycle, SDK 지연, deadline miss의
+  rate-limited 진단 로깅
 - `deploy/config.example.yaml`: `/opt`/`/etc` 경로를 사용하는 운영 예제
 - `pyproject.toml`, `requirements*.txt`: Python 3.10과 고정 의존성
 - `CHANGELOG.md`, `RELEASE_CHECKLIST.md`: `0.2.0rc2` 변경 이력과
@@ -141,6 +143,7 @@ teleop/
     robot/
         __init__.py
         client.py               # RobotClient Protocol
+        diagnostics.py          # timing/lifecycle 로그 집계
         fairino_client.py       # vendor SDK adapter
         fake_client.py          # deterministic fake/hang/fault injection
         state.py                # worker state와 transition
@@ -202,11 +205,34 @@ timing:
 motion:
     position_scale
     ema_alpha
+    max_velocity_mm_s
     max_step_mm
     workspace
+
+gripper:
+    enabled
+    index
+    activate_on_start
+    initially_closed
+    open_position
+    closed_position
+    velocity
+    force
+    command_max_time_ms
+    action_timeout_s
+    poll_period_s
 ```
 
-초기 dry-run 기준값은 기존 코드의 `servo_period_s=0.008`, `position_scale=500`, `max_step_mm=1.5`를 유지한다. `pose_timeout_s=0.100`, `status_hz=10`, `worker_watchdog_s=0.500`은 검증을 시작하기 위한 보수적 후보값이지 하드웨어 승인값이 아니다. 실제 로봇 테스트 결과 없이 timeout, step, workspace, scale 제한을 완화하지 않는다.
+현장 rc2 피드백을 반영한 dry-run 기준값은
+`servo_period_s=0.008`, `pose_timeout_s=0.200`,
+`position_scale=500`, `max_velocity_mm_s=50`,
+`max_step_mm=0.75`, `worker_watchdog_s=0.500`이다.
+200 ms timeout은 Quest/WSS의 짧은 pose 공백 때문에 반복되던 servo
+start/end를 완화하고, 낮춘 step/velocity 제한은 늘어난 입력 만료
+구간의 이동 상한을 보수적으로 제한한다. 이는 실제 정지거리 보장이
+아니며 하드웨어 승인값도 아니다. 실제 로봇 테스트 결과 없이 timeout,
+step, velocity, workspace, scale 제한을 완화하지 않는다. 그리퍼는
+controller 설정과 저위험 commissioning 전까지 기본 비활성이다.
 
 CLI보다 YAML config 파일을 기준으로 하고 CLI는 배포별 경로나 dry-run
 선택을 override한다. 상대 경로는 해당 YAML 파일의 디렉터리를 기준으로
@@ -308,11 +334,11 @@ IPC는 목적별로 분리한다.
    - lock을 잡은 상태에서 SDK 호출, logging, JSON 처리 또는 sleep을 하지 않는다.
 2. control channel
    - parent→worker 단방향 pipe다.
-   - `GRIP_PRESSED`, `GRIP_RELEASED`, `RELEASE`, `SESSION_LOST`,
-     `FAULT_RESET`, `SHUTDOWN`처럼 유실되면 안 되는 저빈도 event를
-     전달한다.
-   - pose snapshot이 overwrite되어도 grip transition은 pipe에서
-     순서대로 보존한다.
+   - `GRIP_PRESSED`, `GRIP_RELEASED`, `TRIGGER_PRESSED`,
+     `TRIGGER_RELEASED`, `RELEASE`, `SESSION_LOST`, `FAULT_RESET`,
+     `SHUTDOWN`처럼 유실되면 안 되는 저빈도 event를 전달한다.
+   - pose snapshot이 overwrite되어도 grip/trigger transition은
+     pipe에서 순서대로 보존한다.
    - pipe EOF도 `SESSION_LOST`로 취급한다.
 3. status channel
    - worker→parent 단방향 bounded channel이다.
@@ -360,13 +386,21 @@ ARMING
 
 ACTIVE
     -> STOPPING      grip 해제, stale pose, session 상실, 종료 요청
+    -> STOPPING      trigger rising edge에서 servo 정지 후 그리퍼 동작 준비
     -> FAULT         ServoCart 또는 safety 오류
 
 STOPPING
     -> SLEEPING      grip 해제 stop 완료
+    -> GRIPPER_ACTION servo stop 뒤 non-blocking MoveGripper 접수
     -> IDLE          stale pose 또는 session 상실 stop 완료
     -> FAULT         stop 실패
     -> SHUTDOWN      종료 경로의 stop 완료
+
+GRIPPER_ACTION
+    -> SLEEPING      GetGripperMotionDone 완료, 새 grip edge 재요구
+    -> IDLE          동작 중 session 상실 뒤 완료
+    -> FAULT         명령/조회 오류, controller fault 또는 timeout
+    -> SHUTDOWN      종료 요청
 
 FAULT
     -> IDLE          grip=false, 연결 정상, 명시적 fault_reset 성공
@@ -389,6 +423,13 @@ grip 해제는 WebXR session이나 controller lease를 해제하지 않는다.
 `ServoMoveEnd()` 후 SLEEPING에서 대기하며 같은 session의 새 grip rising
 edge에서 TCP/VR origin과 filter를 다시 초기화한다.
 
+trigger rising edge는 `gripper.enabled=true`이고 `ACTIVE`, fresh pose,
+grip=true일 때만 접수한다. 접수 전에 `ServoMoveEnd()`를 완료하고
+`MoveGripper(..., block=1)`을 한 번 호출한다. worker는 고정 sleep을
+사용하지 않고 `GetGripperMotionDone()`을 설정 주기로 polling한다.
+완료 뒤 ServoMoveStart를 자동 호출하지 않으며, 완료 이후 grip을
+완전히 놓았다 다시 눌러야 재무장된다.
+
 ## servo loop 설계
 
 - clock은 `time.monotonic_ns()`를 사용한다.
@@ -397,6 +438,9 @@ edge에서 TCP/VR origin과 filter를 다시 초기화한다.
 - 매 tick에서 control event를 먼저 처리하고, 최신 pose age를 확인한 뒤에만 target을 계산한다.
 - grip=true라도 pose age가 timeout을 넘으면 STOPPING으로 전이한다.
 - target 계산은 순수 함수로 유지하고 SDK adapter에 이미 검증된 6D target만 전달한다.
+- motion limiter는 실제 ServoCart 전송 간격에
+  `max_velocity_mm_s`를 곱한 time-based step과 `max_step_mm`의
+  작은 값을 적용한다. 긴 지연 한 번이 큰 보정 명령으로 바뀌지 않는다.
 - 회전 텔레옵은 현재 범위가 아니다. orientation은 protocol에서 수집·검증하되 초기 구현은 robot origin orientation을 유지한다.
 - `MAX_DELTA_PER_STEP` 같은 중복 제한을 만들지 않는다. 실제 적용되는 step 제한은 config 한 곳에만 둔다.
 - status에는 tick period, jitter, SDK call duration, overrun, missed tick을 포함한다.
@@ -412,6 +456,9 @@ get_current_tcp
 servo_start
 servo_cart
 servo_end
+activate_gripper
+move_gripper
+get_gripper_motion_state
 reset_fault
 close
 ```
@@ -426,6 +473,11 @@ close
 - 모든 SDK 오류 코드를 typed exception 또는 result로 변환
 - `ServoCart(mode=0, ...)`를 유지하되 SDK signature에 있을 때만
   `exaxis=[0,0,0,0]` 적용
+- `inspect.signature`는 connect 시 한 번 수행하며 motion RPC 시험
+  호출로 호환성을 판별하지 않는다. 모호한 `**kwargs` signature와
+  부분 지원 signature는 실제 motion 전에 거부한다.
+- gripper 활성 시 legacy 6-argument와 신형 extended `MoveGripper`
+  signature를 구분하고 non-blocking 명령 후 완료 상태를 정규화한다.
 - SDK에서 미개방으로 표시된 `acc`, `vel`, `filterT`, `gain`은 공식
   기본값 `0`을 유지
 - `ServoMoveEnd()` 뒤 `CloseRPC()` 호출
@@ -445,6 +497,8 @@ vendor `Robot.py`를 직접 수정하지 않는다. 꼭 patch해야 하면 원�
 - pose에 증가하는 `seq` 포함
 - WebSocket 연결과 controller lease가 없으면 VR control 활성화를 제한
 - `bufferedAmount` 기반 backpressure와 drop counter 표시
+- trigger에도 analog hysteresis를 적용하고 그리퍼 enabled/busy/position
+  및 `GRIPPER_ACTION`을 표시
 - WebXR `end`에서 `webxr_ended` control event 전송
 - WebSocket 재연결 뒤 기존 grip 상태로 자동 재개하지 않음
 - server의 `IDLE/SLEEPING/ARMING/ACTIVE/STOPPING/FAULT`를 UI에 구분 표시
@@ -466,6 +520,8 @@ VR 내부 화면이 비어 있어도 fault와 tracking 상태를 작업자가 �
 - controller disconnect, WebXR end, lease loss, protocol fault가 stop event로 연결된다.
 - worker restart 후 이전 tracking을 자동 복원하지 않는다.
 - SDK 오류를 로그만 남기고 다음 target을 계속 보내지 않는다.
+- gripper 동작을 위해 worker loop를 고정 sleep으로 막거나 완료 뒤
+  ServoMoveStart를 자동 호출하지 않는다.
 - workspace clamp는 입력 검증, step 제한, timeout, dead-man을 대체하지 않는다.
 - 실제 로봇 모드는 명시적인 IP와 hardware 확인 flag 없이는 시작되지 않는다.
 - 실제 로봇 자동 테스트와 vendor example 자동 실행을 금지한다.
@@ -592,6 +648,9 @@ fault_count by reason
 - burst pose에서 최신 값만 소비
 - pose timeout과 grip release stop
 - grip release 후 SLEEPING, 같은 session의 rising edge 재개
+- trigger transition overwrite 방지, servo end 뒤 gripper 명령,
+  완료 후 새 grip edge 재요구
+- gripper status fault/timeout과 session loss 중 완료 경로
 - controller/WebXR disconnect stop
 - `ServoMoveStart` 실패 시 ACTIVE 진입 금지
 - `ServoCart` 오류 후 FAULT

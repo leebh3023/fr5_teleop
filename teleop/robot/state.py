@@ -14,6 +14,7 @@ class WorkerState(str, Enum):
     SLEEPING = "SLEEPING"
     ARMING = "ARMING"
     ACTIVE = "ACTIVE"
+    GRIPPER_ACTION = "GRIPPER_ACTION"
     STOPPING = "STOPPING"
     FAULT = "FAULT"
     SHUTDOWN = "SHUTDOWN"
@@ -24,6 +25,8 @@ class ControlCommand(str, Enum):
     SESSION_LOST = "SESSION_LOST"
     GRIP_PRESSED = "GRIP_PRESSED"
     GRIP_RELEASED = "GRIP_RELEASED"
+    TRIGGER_PRESSED = "TRIGGER_PRESSED"
+    TRIGGER_RELEASED = "TRIGGER_RELEASED"
     FAULT_RESET = "FAULT_RESET"
     SHUTDOWN = "SHUTDOWN"
 
@@ -34,6 +37,8 @@ class WorkerCounters:
     servo_cart_count: int = 0
     servo_end_count: int = 0
     missed_ticks: int = 0
+    gripper_command_count: int = 0
+    gripper_complete_count: int = 0
 
 
 @dataclass
@@ -50,6 +55,9 @@ class WorkerStatus:
     counters: WorkerCounters
     fault: str | None = None
     reason: str | None = None
+    gripper_enabled: bool = False
+    gripper_busy: bool = False
+    gripper_position: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)

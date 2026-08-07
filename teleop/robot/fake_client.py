@@ -4,7 +4,7 @@ import time
 from dataclasses import dataclass
 
 from teleop.control_math import TcpPose
-from teleop.robot.client import RobotClientError
+from teleop.robot.client import GripperMotionState, RobotClientError
 
 
 @dataclass(frozen=True)
@@ -13,6 +13,8 @@ class FakeRobotBehavior:
     fail_code: int = 99
     hang_on: str | None = None
     hang_seconds: float = 0.0
+    gripper_motion_s: float = 0.0
+    gripper_fault: int = 0
 
 
 class FakeRobotClient:
@@ -21,6 +23,9 @@ class FakeRobotClient:
         self.connected = False
         self.servo_active = False
         self.current_tcp: TcpPose = (300.0, 0.0, 400.0, 180.0, 0.0, 0.0)
+        self.gripper_active = False
+        self.gripper_position = 0
+        self._gripper_done_ns = 0
 
     def _before(self, operation: str) -> None:
         if self.behavior.hang_on == operation:
@@ -54,6 +59,31 @@ class FakeRobotClient:
     def servo_end(self) -> None:
         self._before("servo_end")
         self.servo_active = False
+
+    def activate_gripper(self) -> None:
+        self._before("activate_gripper")
+        self.gripper_active = True
+
+    def move_gripper(self, position: int) -> None:
+        self._before("move_gripper")
+        if self.servo_active:
+            raise RobotClientError(
+                "move_gripper",
+                None,
+                "servo must be stopped before gripper movement",
+            )
+        self.gripper_position = position
+        self._gripper_done_ns = (
+            time.monotonic_ns()
+            + int(self.behavior.gripper_motion_s * 1_000_000_000)
+        )
+
+    def get_gripper_motion_state(self) -> GripperMotionState:
+        self._before("get_gripper_motion_state")
+        return GripperMotionState(
+            fault=self.behavior.gripper_fault,
+            done=time.monotonic_ns() >= self._gripper_done_ns,
+        )
 
     def reset_fault(self) -> None:
         self._before("reset_fault")
