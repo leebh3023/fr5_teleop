@@ -47,7 +47,9 @@ requires recorded native timing and supervised hardware results.
 - [x] legacy/extended/ambiguous SDK signature adapter 시험
 - [x] elapsed-time velocity limiter와 absolute step cap unit 시험
 - [x] SDK operation별 p50/p95/p99/max 로그 집계 시험
-- [x] Ubuntu 22.04 WSL 전체 suite: 51 passed
+- [x] Quest client telemetry validation/ack와 read-only operator monitor
+- [x] parent-owned SIGINT의 graceful worker shutdown
+- [x] Ubuntu 22.04 WSL 전체 suite: 58 passed
 - [x] Ubuntu 22.04 WSL dry-run server smoke
 - [ ] 실제 SDK V2.0.8에서 gripper signature와 completion 반환 기록
 - [ ] 실제 FR5에서 trigger 20회 command/complete count 대조

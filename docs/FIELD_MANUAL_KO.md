@@ -127,6 +127,20 @@ Quest와 같은 네트워크의 다른 장치에서 다음 주소가 Ubuntu PC�
 https://<QUEST에서 접근 가능한 Ubuntu PC 주소>:8443/
 ```
 
+작업자 PC 또는 별도 단말에서는 다음 monitor를 연다.
+
+```text
+https://<Ubuntu PC 주소>:8443/monitor
+```
+
+Quest immersive 화면 안의 시작 페이지는 운용 중 보이지 않으므로
+상태 판단에 사용하지 않는다. monitor는 제어권을 얻거나 로봇 명령을
+보내지 않는 observer다.
+
+공유기 위치에 따라 통신 품질이 달라지는 현장에서는 실제 로봇 시험
+전에 `docs/KNOWN_ISSUES_KO.md`의 좌우 위치·방향 dry-run matrix를
+수행한다. 확인 전까지는 끊김이 재현되지 않은 AP 위치를 변경하지 않는다.
+
 Ubuntu 방화벽을 사용하는 경우 Quest 네트워크에서 오는 `8443/TCP`만
 허용한다. 인터넷에 직접 노출하지 않는다.
 

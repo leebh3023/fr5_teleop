@@ -2,7 +2,13 @@ import math
 
 import pytest
 
-from teleop.protocol import ControlEvent, PoseMessage, ProtocolError, parse_client_message
+from teleop.protocol import (
+    ClientTelemetry,
+    ControlEvent,
+    PoseMessage,
+    ProtocolError,
+    parse_client_message,
+)
 
 
 def valid_pose() -> dict:
@@ -17,6 +23,26 @@ def valid_pose() -> dict:
         "orientation_xyzw": [0.0, 0.0, 0.0, 2.0],
         "grip": True,
         "trigger": False,
+    }
+
+
+def valid_telemetry() -> dict:
+    return {
+        "version": 1,
+        "type": "telemetry",
+        "session_id": "session",
+        "seq": 3,
+        "client_time_ms": 1000.0,
+        "xr_frame_count": 90,
+        "valid_pose_count": 88,
+        "pose_send_count": 88,
+        "pose_drop_count": 1,
+        "tracking_loss_count": 2,
+        "max_xr_frame_gap_ms": 15.0,
+        "max_pose_gap_ms": 25.0,
+        "ws_buffered_amount": 0,
+        "last_rtt_ms": 4.5,
+        "max_rtt_ms": 8.0,
     }
 
 
@@ -56,3 +82,34 @@ def test_control_event_is_parsed() -> None:
         123,
     )
     assert message == ControlEvent("session", "release_control")
+
+
+def test_client_telemetry_is_validated() -> None:
+    message = parse_client_message(valid_telemetry(), 456)
+
+    assert isinstance(message, ClientTelemetry)
+    assert message.received_ns == 456
+    assert message.pose_drop_count == 1
+    assert message.max_rtt_ms == 8.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("seq", -1),
+        ("xr_frame_count", True),
+        ("tracking_loss_count", -1),
+        ("max_pose_gap_ms", math.inf),
+        ("last_rtt_ms", -0.1),
+        ("ws_buffered_amount", 1.5),
+    ],
+)
+def test_invalid_client_telemetry_is_rejected(
+    field: str,
+    value: object,
+) -> None:
+    payload = valid_telemetry()
+    payload[field] = value
+
+    with pytest.raises(ProtocolError):
+        parse_client_message(payload, 456)

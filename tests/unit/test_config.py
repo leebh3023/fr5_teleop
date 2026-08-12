@@ -12,6 +12,7 @@ def write_config(path: Path, extra: str = "") -> Path:
     web_dir = path.parent / "web"
     web_dir.mkdir()
     (web_dir / "index.html").write_text("<!doctype html>", encoding="utf-8")
+    (web_dir / "monitor.html").write_text("<!doctype html>", encoding="utf-8")
     path.write_text(
         """
 runtime:

@@ -32,7 +32,40 @@ class ControlEvent:
     event: str
 
 
-ClientMessage = PoseMessage | ControlEvent
+@dataclass(frozen=True)
+class ClientTelemetry:
+    session_id: str
+    seq: int
+    client_time_ms: float
+    xr_frame_count: int
+    valid_pose_count: int
+    pose_send_count: int
+    pose_drop_count: int
+    tracking_loss_count: int
+    max_xr_frame_gap_ms: float
+    max_pose_gap_ms: float
+    ws_buffered_amount: int
+    last_rtt_ms: float | None
+    max_rtt_ms: float | None
+    received_ns: int
+
+    def to_status_dict(self) -> dict[str, int | float | None]:
+        return {
+            "seq": self.seq,
+            "xr_frame_count": self.xr_frame_count,
+            "valid_pose_count": self.valid_pose_count,
+            "pose_send_count": self.pose_send_count,
+            "pose_drop_count": self.pose_drop_count,
+            "tracking_loss_count": self.tracking_loss_count,
+            "max_xr_frame_gap_ms": self.max_xr_frame_gap_ms,
+            "max_pose_gap_ms": self.max_pose_gap_ms,
+            "ws_buffered_amount": self.ws_buffered_amount,
+            "last_rtt_ms": self.last_rtt_ms,
+            "max_rtt_ms": self.max_rtt_ms,
+        }
+
+
+ClientMessage = PoseMessage | ControlEvent | ClientTelemetry
 
 
 def _finite_vector(value: Any, length: int, name: str) -> tuple[float, ...]:
@@ -71,6 +104,9 @@ def parse_client_message(payload: Mapping[str, Any], received_ns: int) -> Client
         if event not in allowed:
             raise ProtocolError(f"unsupported event: {event!r}")
         return ControlEvent(session_id=session_id, event=event)
+
+    if message_type == "telemetry":
+        return _parse_client_telemetry(payload, session_id, received_ns)
 
     if message_type != "pose":
         raise ProtocolError(f"unsupported message type: {message_type!r}")
@@ -122,3 +158,82 @@ def parse_client_message(payload: Mapping[str, Any], received_ns: int) -> Client
         trigger=trigger,
         received_ns=received_ns,
     )
+
+
+def _parse_client_telemetry(
+    payload: Mapping[str, Any],
+    session_id: str,
+    received_ns: int,
+) -> ClientTelemetry:
+    seq = _non_negative_integer(payload.get("seq"), "seq")
+    client_time_ms = _non_negative_number(
+        payload.get("client_time_ms"),
+        "client_time_ms",
+    )
+    counters = {
+        name: _non_negative_integer(payload.get(name), name)
+        for name in (
+            "xr_frame_count",
+            "valid_pose_count",
+            "pose_send_count",
+            "pose_drop_count",
+            "tracking_loss_count",
+            "ws_buffered_amount",
+        )
+    }
+    max_xr_frame_gap_ms = _non_negative_number(
+        payload.get("max_xr_frame_gap_ms"),
+        "max_xr_frame_gap_ms",
+    )
+    max_pose_gap_ms = _non_negative_number(
+        payload.get("max_pose_gap_ms"),
+        "max_pose_gap_ms",
+    )
+    last_rtt_ms = _optional_non_negative_number(
+        payload.get("last_rtt_ms"),
+        "last_rtt_ms",
+    )
+    max_rtt_ms = _optional_non_negative_number(
+        payload.get("max_rtt_ms"),
+        "max_rtt_ms",
+    )
+    return ClientTelemetry(
+        session_id=session_id,
+        seq=seq,
+        client_time_ms=client_time_ms,
+        xr_frame_count=counters["xr_frame_count"],
+        valid_pose_count=counters["valid_pose_count"],
+        pose_send_count=counters["pose_send_count"],
+        pose_drop_count=counters["pose_drop_count"],
+        tracking_loss_count=counters["tracking_loss_count"],
+        max_xr_frame_gap_ms=max_xr_frame_gap_ms,
+        max_pose_gap_ms=max_pose_gap_ms,
+        ws_buffered_amount=counters["ws_buffered_amount"],
+        last_rtt_ms=last_rtt_ms,
+        max_rtt_ms=max_rtt_ms,
+        received_ns=received_ns,
+    )
+
+
+def _non_negative_integer(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ProtocolError(f"{name} must be a non-negative integer")
+    return value
+
+
+def _non_negative_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProtocolError(f"{name} must be a number")
+    result = float(value)
+    if not math.isfinite(result) or result < 0:
+        raise ProtocolError(f"{name} must be finite and non-negative")
+    return result
+
+
+def _optional_non_negative_number(
+    value: Any,
+    name: str,
+) -> float | None:
+    if value is None:
+        return None
+    return _non_negative_number(value, name)

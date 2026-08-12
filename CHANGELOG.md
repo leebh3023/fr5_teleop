@@ -7,6 +7,11 @@ release candidate로 표시한다.
 
 ### Added
 
+- Quest XR frame/controller pose gap, tracking loss, WebSocket RTT,
+  buffered bytes와 pose send/drop을 보고하는 1초 client telemetry
+- control lease를 claim하지 않는 `/monitor` 작업자 화면
+- AP 좌우 위치·Quest 방향별 RF/WebSocket dry-run 시험표와 알려진
+  문제 우선순위 문서
 - optional trigger-controlled gripper configuration and explicit
   `GRIPPER_ACTION` worker state
 - lossless trigger press/release IPC, gripper completion polling and
@@ -41,6 +46,10 @@ release candidate로 표시한다.
 
 ### Fixed
 
+- Ctrl+C가 parent와 RobotWorker를 동시에 interrupt해 child가
+  `KeyboardInterrupt` FAULT로 종료되던 signal ownership 문제
+- application shutdown에서 동일한 `SHUTDOWN` command를 두 번 보내던
+  lifecycle 중복
 - trigger 그리퍼 동작 중 worker를 고정 sleep으로 막아 watchdog/stale
   판정과 servo lifecycle이 꼬이던 현장 임시 구현 제거
 - 그리퍼 완료 직후 grip을 계속 누른 상태에서 ServoMoveStart가 자동

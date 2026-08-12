@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import signal
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -743,6 +744,11 @@ def run_robot_worker(
     status_queue: Any,
     heartbeat_ns: Any,
 ) -> None:
+    # The parent aiohttp process owns terminal/service signals and converts
+    # them into the ordered SHUTDOWN control command. Without this, Ctrl+C
+    # reaches both processes and can interrupt the child inside its servo
+    # sleep or an SDK call before ServoMoveEnd/CloseRPC.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     logging.basicConfig(
         level=getattr(logging, spec.config.log_level),
         format=(

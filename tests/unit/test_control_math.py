@@ -22,6 +22,7 @@ def test_engage_resets_previous_target_and_clamps_workspace(tmp_path) -> None:
     web_dir = tmp_path / "web"
     web_dir.mkdir()
     web_dir.joinpath("index.html").write_text("", encoding="utf-8")
+    web_dir.joinpath("monitor.html").write_text("", encoding="utf-8")
     config = TeleopConfig(
         web_dir=web_dir,
         tls_cert_path=None,
@@ -49,6 +50,7 @@ def test_target_accepts_time_based_step_below_absolute_cap(tmp_path) -> None:
     web_dir = tmp_path / "web"
     web_dir.mkdir()
     web_dir.joinpath("index.html").write_text("", encoding="utf-8")
+    web_dir.joinpath("monitor.html").write_text("", encoding="utf-8")
     config = TeleopConfig(
         web_dir=web_dir,
         tls_cert_path=None,
@@ -73,6 +75,7 @@ def test_target_rejects_step_above_absolute_cap(tmp_path) -> None:
     web_dir = tmp_path / "web"
     web_dir.mkdir()
     web_dir.joinpath("index.html").write_text("", encoding="utf-8")
+    web_dir.joinpath("monitor.html").write_text("", encoding="utf-8")
     config = TeleopConfig(
         web_dir=web_dir,
         tls_cert_path=None,
@@ -94,6 +97,7 @@ def test_invalid_timing_config_is_rejected(tmp_path) -> None:
     web_dir = tmp_path / "web"
     web_dir.mkdir()
     web_dir.joinpath("index.html").write_text("", encoding="utf-8")
+    web_dir.joinpath("monitor.html").write_text("", encoding="utf-8")
     config = replace(
         TeleopConfig(web_dir=web_dir, tls_cert_path=None, tls_key_path=None),
         pose_timeout_s=0.001,

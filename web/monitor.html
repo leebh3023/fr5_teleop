@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
+<title>VR Teleop 현장 모니터</title>
+<style>
+  :root {
+    color-scheme: dark;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    background: #0a0e17;
+    color: #e5e7eb;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; }
+  main { max-width: 1100px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 1.7rem; }
+  .subtitle { color: #94a3b8; margin-bottom: 18px; }
+  .banner {
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: #172033;
+    border: 1px solid #334155;
+    margin-bottom: 14px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+    gap: 12px;
+  }
+  .card {
+    background: #111827;
+    border: 1px solid #263244;
+    border-radius: 12px;
+    padding: 15px;
+  }
+  .card h2 {
+    margin: 0 0 10px;
+    font-size: 0.9rem;
+    color: #93c5fd;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 0;
+    border-bottom: 1px solid #1f2937;
+  }
+  .row:last-child { border-bottom: 0; }
+  .label { color: #94a3b8; }
+  .value {
+    text-align: right;
+    font-family: "Cascadia Mono", Consolas, monospace;
+  }
+  .ok { color: #4ade80; }
+  .warn { color: #fbbf24; }
+  .bad { color: #fb7185; }
+  .muted { color: #94a3b8; }
+  #fault { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <h1>VR Teleop 현장 모니터</h1>
+  <div class="subtitle">
+    Quest 내부 화면과 별개로 Ubuntu PC 또는 작업자 단말에서 확인합니다.
+  </div>
+  <div class="banner" id="summary">
+    서버 연결 대기 중
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>Control state</h2>
+      <div class="row"><span class="label">WebSocket</span><span class="value" id="ws">연결 중</span></div>
+      <div class="row"><span class="label">Robot state</span><span class="value" id="state">—</span></div>
+      <div class="row"><span class="label">Tracking</span><span class="value" id="tracking">—</span></div>
+      <div class="row"><span class="label">Rearm required</span><span class="value" id="rearm">—</span></div>
+      <div class="row"><span class="label">Input age</span><span class="value" id="input-age">—</span></div>
+      <div class="row"><span class="label">Fault / reason</span><span class="value" id="fault">—</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Quest / WebSocket</h2>
+      <div class="row"><span class="label">Telemetry age</span><span class="value" id="telemetry-age">—</span></div>
+      <div class="row"><span class="label">RTT last / max</span><span class="value" id="rtt">—</span></div>
+      <div class="row"><span class="label">XR max frame gap</span><span class="value" id="xr-gap">—</span></div>
+      <div class="row"><span class="label">Controller max pose gap</span><span class="value" id="pose-gap">—</span></div>
+      <div class="row"><span class="label">Buffered bytes</span><span class="value" id="buffered">—</span></div>
+      <div class="row"><span class="label">Pose sent / dropped</span><span class="value" id="pose-counts">—</span></div>
+      <div class="row"><span class="label">Tracking losses</span><span class="value" id="tracking-losses">—</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Robot worker</h2>
+      <div class="row"><span class="label">Worker</span><span class="value" id="worker">—</span></div>
+      <div class="row"><span class="label">Tick / missed</span><span class="value" id="ticks">—</span></div>
+      <div class="row"><span class="label">Jitter</span><span class="value" id="jitter">—</span></div>
+      <div class="row"><span class="label">Last SDK call</span><span class="value" id="sdk">—</span></div>
+      <div class="row"><span class="label">Servo start / cart / end</span><span class="value" id="servo-counts">—</span></div>
+      <div class="row"><span class="label">Gripper command / complete</span><span class="value" id="gripper-counts">—</span></div>
+    </section>
+
+    <section class="card">
+      <h2>판별 기준</h2>
+      <div class="muted">
+        RTT와 server receive gap만 커지면 Wi-Fi/TCP 경로를 우선 조사합니다.
+        XR frame gap과 controller pose gap도 함께 커지면 Quest tracking 또는
+        브라우저 정체 가능성이 큽니다. Servo start/end가 반복 증가하면
+        pose timeout에 의한 stop/rearm입니다.
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const byId = id => document.getElementById(id);
+const fmt = (value, digits = 1) => (
+  Number.isFinite(value) ? value.toFixed(digits) : '—'
+);
+let previousTelemetry = null;
+let latestPoseDropDelta = 0;
+let latestTrackingLossDelta = 0;
+let previousControllerId = null;
+
+function severity(element, value, warn, bad) {
+  element.className = 'value';
+  if (!Number.isFinite(value)) {
+    element.classList.add('muted');
+  } else if (value >= bad) {
+    element.classList.add('bad');
+  } else if (value >= warn) {
+    element.classList.add('warn');
+  } else {
+    element.classList.add('ok');
+  }
+}
+
+function updateStatus(data) {
+  if (data.controller_id !== previousControllerId) {
+    previousControllerId = data.controller_id;
+    previousTelemetry = null;
+    latestPoseDropDelta = 0;
+    latestTrackingLossDelta = 0;
+  }
+  const state = data.state || '—';
+  byId('state').textContent = state;
+  byId('state').className = `value ${state === 'FAULT' ? 'bad' : (state === 'ACTIVE' ? 'ok' : 'warn')}`;
+  byId('tracking').textContent = data.tracking ? 'ACTIVE' : 'OFF';
+  byId('tracking').className = `value ${data.tracking ? 'ok' : 'warn'}`;
+  byId('rearm').textContent = data.rearm_required ? 'YES' : 'NO';
+  byId('input-age').textContent = `${fmt(data.input_age_ms)} ms`;
+  severity(byId('input-age'), data.input_age_ms, 100, 200);
+  byId('fault').textContent = data.fault || data.reason || '—';
+
+  const worker = data.worker || {};
+  byId('worker').textContent =
+    `gen ${worker.generation ?? '—'} / ${worker.alive ? 'alive' : 'down'}`;
+  const counters = data.counters || {};
+  byId('ticks').textContent =
+    `${data.tick ?? 0} / ${counters.missed_ticks ?? 0}`;
+  byId('jitter').textContent = `${fmt(data.jitter_ms, 3)} ms`;
+  severity(byId('jitter'), Math.abs(data.jitter_ms), 2, 8);
+  byId('sdk').textContent = `${fmt(data.sdk_call_ms, 3)} ms`;
+  severity(byId('sdk'), data.sdk_call_ms, 8, 20);
+  byId('servo-counts').textContent =
+    `${counters.servo_start_count ?? 0} / ${counters.servo_cart_count ?? 0} / ${counters.servo_end_count ?? 0}`;
+  byId('gripper-counts').textContent =
+    `${counters.gripper_command_count ?? 0} / ${counters.gripper_complete_count ?? 0}`;
+
+  const telemetry = data.client_telemetry;
+  if (!telemetry) {
+    for (const id of [
+      'telemetry-age', 'rtt', 'xr-gap', 'pose-gap', 'buffered',
+      'pose-counts', 'tracking-losses'
+    ]) {
+      byId(id).textContent = '수신 없음';
+      byId(id).className = 'value muted';
+    }
+    byId('summary').textContent =
+      `${state} — controller telemetry 수신 대기`;
+    return;
+  }
+  if (
+    previousTelemetry === null
+    || telemetry.seq !== previousTelemetry.seq
+  ) {
+    latestPoseDropDelta = Math.max(
+      0,
+      telemetry.pose_drop_count
+        - (previousTelemetry?.pose_drop_count ?? 0)
+    );
+    latestTrackingLossDelta = Math.max(
+      0,
+      telemetry.tracking_loss_count
+        - (previousTelemetry?.tracking_loss_count ?? 0)
+    );
+    previousTelemetry = telemetry;
+  }
+
+  byId('telemetry-age').textContent = `${fmt(telemetry.age_ms)} ms`;
+  severity(byId('telemetry-age'), telemetry.age_ms, 1500, 3000);
+  byId('rtt').textContent =
+    `${fmt(telemetry.last_rtt_ms)} / ${fmt(telemetry.max_rtt_ms)} ms`;
+  severity(byId('rtt'), telemetry.max_rtt_ms, 100, 200);
+  byId('xr-gap').textContent = `${fmt(telemetry.max_xr_frame_gap_ms)} ms`;
+  severity(byId('xr-gap'), telemetry.max_xr_frame_gap_ms, 50, 100);
+  byId('pose-gap').textContent = `${fmt(telemetry.max_pose_gap_ms)} ms`;
+  severity(byId('pose-gap'), telemetry.max_pose_gap_ms, 100, 200);
+  byId('buffered').textContent = `${telemetry.ws_buffered_amount} B`;
+  severity(byId('buffered'), telemetry.ws_buffered_amount, 4096, 65536);
+  byId('pose-counts').textContent =
+    `${telemetry.pose_send_count} / ${telemetry.pose_drop_count} (Δ${latestPoseDropDelta})`;
+  byId('tracking-losses').textContent =
+    `${telemetry.tracking_loss_count} (Δ${latestTrackingLossDelta})`;
+  severity(byId('tracking-losses'), latestTrackingLossDelta, 1, 10);
+
+  const degraded = (
+    telemetry.age_ms >= 1500
+    || (telemetry.max_rtt_ms ?? 0) >= 100
+    || telemetry.max_pose_gap_ms >= 100
+    || telemetry.ws_buffered_amount >= 4096
+  );
+  const causes = [];
+  if (
+    (telemetry.max_rtt_ms ?? 0) >= 100
+    || telemetry.ws_buffered_amount >= 4096
+    || latestPoseDropDelta > 0
+  ) causes.push('Wi-Fi/TCP');
+  if (telemetry.max_xr_frame_gap_ms >= 50) {
+    causes.push('Quest frame');
+  }
+  if (
+    telemetry.max_pose_gap_ms >= 100
+    || latestTrackingLossDelta > 0
+  ) causes.push('controller tracking');
+  byId('summary').textContent = degraded
+    ? `${state} — 품질 저하 후보: ${causes.join(', ') || '분류 대기'}`
+    : `${state} — 통신 telemetry 정상 범위`;
+  byId('summary').className = `banner ${degraded ? 'warn' : 'ok'}`;
+}
+
+function connect() {
+  const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+  const socket = new WebSocket(`${scheme}://${location.host}/ws`);
+  socket.onopen = () => {
+    byId('ws').textContent = 'CONNECTED';
+    byId('ws').className = 'value ok';
+  };
+  socket.onmessage = event => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'status') updateStatus(data);
+  };
+  socket.onclose = () => {
+    byId('ws').textContent = 'DISCONNECTED';
+    byId('ws').className = 'value bad';
+    setTimeout(connect, 2000);
+  };
+  socket.onerror = () => socket.close();
+}
+
+connect();
+</script>
+</body>
+</html>

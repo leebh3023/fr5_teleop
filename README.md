@@ -116,7 +116,13 @@ Health endpoints:
 GET /health/live
 GET /health/ready
 GET /ws
+GET /monitor
 ```
+
+`/monitor`는 control lease를 claim하지 않는 작업자용 observer 화면이다.
+Quest/WebXR의 frame·pose gap, WebSocket RTT/drop과 robot worker 상태를
+Ubuntu PC나 별도 작업자 단말에서 확인한다. 알려진 문제와 원인 분리
+절차는 `docs/KNOWN_ISSUES_KO.md`를 따른다.
 
 ## Real robot
 

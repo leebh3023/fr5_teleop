@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
 <title>VR Teleop — FR5</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -168,7 +169,33 @@ let sessionId = null;
 let controllerOwned = false;
 let poseSeq = 0;
 let poseDropCount = 0;
+let poseSendCount = 0;
+let telemetrySeq = 0;
+let xrFrameCount = 0;
+let validPoseCount = 0;
+let trackingLossCount = 0;
+let lastXrFrameTimeMs = null;
+let lastValidPoseTimeMs = null;
+let maxXrFrameGapMs = 0;
+let maxPoseGapMs = 0;
+let lastRttMs = null;
+let maxRttMs = null;
 const MAX_BUFFERED_BYTES = 64 * 1024;
+
+function resetClientStats() {
+  poseDropCount = 0;
+  poseSendCount = 0;
+  telemetrySeq = 0;
+  xrFrameCount = 0;
+  validPoseCount = 0;
+  trackingLossCount = 0;
+  lastXrFrameTimeMs = null;
+  lastValidPoseTimeMs = null;
+  maxXrFrameGapMs = 0;
+  maxPoseGapMs = 0;
+  lastRttMs = null;
+  maxRttMs = null;
+}
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -189,6 +216,7 @@ function connectWS() {
       if (data.type === 'hello') {
         sessionId = data.session_id;
         poseSeq = 0;
+        resetClientStats();
         controllerOwned = false;
         document.getElementById('ws-status').textContent = '연결됨';
         if (xrSession) {
@@ -202,6 +230,10 @@ function connectWS() {
         }
       } else if (data.type === 'status') {
         updateStatusUI(data);
+      } else if (data.type === 'telemetry_ack') {
+        const rtt = Math.max(0, performance.now() - data.client_time_ms);
+        lastRttMs = rtt;
+        maxRttMs = maxRttMs === null ? rtt : Math.max(maxRttMs, rtt);
       } else if (data.type === 'error') {
         console.warn('Protocol error:', data.message);
       }
@@ -256,6 +288,45 @@ function sendPose(hand, pos, ori, grip, trigger) {
     grip: grip,
     trigger: trigger
   }));
+  poseSendCount += 1;
+}
+
+function sendClientTelemetry() {
+  if (
+    !ws
+    || ws.readyState !== WebSocket.OPEN
+    || !sessionId
+    || !controllerOwned
+  ) {
+    return;
+  }
+  const now = performance.now();
+  const currentPoseGapMs = (
+    xrSession && lastValidPoseTimeMs !== null
+      ? Math.max(0, now - lastValidPoseTimeMs)
+      : 0
+  );
+  const reportPoseGapMs = Math.max(maxPoseGapMs, currentPoseGapMs);
+  ws.send(JSON.stringify({
+    version: 1,
+    type: 'telemetry',
+    session_id: sessionId,
+    seq: telemetrySeq++,
+    client_time_ms: now,
+    xr_frame_count: xrFrameCount,
+    valid_pose_count: validPoseCount,
+    pose_send_count: poseSendCount,
+    pose_drop_count: poseDropCount,
+    tracking_loss_count: trackingLossCount,
+    max_xr_frame_gap_ms: maxXrFrameGapMs,
+    max_pose_gap_ms: reportPoseGapMs,
+    ws_buffered_amount: ws.bufferedAmount,
+    last_rtt_ms: lastRttMs,
+    max_rtt_ms: maxRttMs
+  }));
+  maxXrFrameGapMs = 0;
+  maxPoseGapMs = 0;
+  maxRttMs = lastRttMs;
 }
 
 function updateStatusUI(data) {
@@ -373,6 +444,10 @@ async function startVR() {
     xrSession = await navigator.xr.requestSession('immersive-vr', {
       requiredFeatures: ['local-floor']
     });
+    lastXrFrameTimeMs = null;
+    lastValidPoseTimeMs = null;
+    maxXrFrameGapMs = 0;
+    maxPoseGapMs = 0;
 
     // WebXR은 렌더링할 3D 그래픽(WebGL) 레이어가 없으면 무한 로딩에 빠집니다.
     // 위치 추적만 하더라도 더미(Dummy) WebGL 캔버스를 만들어 연결해 주어야 합니다.
@@ -394,6 +469,8 @@ async function startVR() {
 
     xrSession.addEventListener('end', () => {
       xrSession = null;
+      lastXrFrameTimeMs = null;
+      lastValidPoseTimeMs = null;
       gripLatchedByHand = { left: false, right: false, none: false };
       triggerLatchedByHand = { left: false, right: false, none: false };
       document.getElementById('dot-xr').className = 'dot red';
@@ -414,6 +491,14 @@ async function startVR() {
 function onXRFrame(time, frame) {
   if (!xrSession) return;
   xrSession.requestAnimationFrame(onXRFrame);
+  xrFrameCount += 1;
+  if (lastXrFrameTimeMs !== null) {
+    maxXrFrameGapMs = Math.max(
+      maxXrFrameGapMs,
+      Math.max(0, time - lastXrFrameTimeMs)
+    );
+  }
+  lastXrFrameTimeMs = time;
 
   // 프레임마다 화면을 지워주어 VR 화면이 검은색(또는 회색) 빈 공간으로 정상 표시되게 합니다.
   if (gl && xrSession.renderState.baseLayer) {
@@ -423,47 +508,63 @@ function onXRFrame(time, frame) {
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   }
 
-  for (const source of xrSession.inputSources) {
-    // 오른손 컨트롤러 우선, 없으면 왼손
-    if (!source.gripSpace) continue;
-
-    const pose = frame.getPose(source.gripSpace, refSpace);
-    if (!pose) continue;
-
-    const pos = pose.transform.position;
-    const ori = pose.transform.orientation;
-
-    // 버튼: 0=trigger, 1=grip
-    let grip = false;
-    let trigger = false;
-    if (source.gamepad) {
-      trigger = readTriggerButton(
-        source.gamepad.buttons[0],
-        source.handedness
-      );
-      grip = readGripButton(source.gamepad.buttons[1], source.handedness);
-    }
-
-    // UI 업데이트
-    document.getElementById('vr-pos').textContent =
-      `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
-    document.getElementById('grip-status').textContent =
-      grip ? '🟢 누름' : '⚪ 해제';
-    document.getElementById('trigger-status').textContent =
-      trigger ? '🟠 누름' : '⚪ 해제';
-
-    // 서버로 전송 (오른손 우선)
-    if (source.handedness === 'right' || xrSession.inputSources.length === 1) {
-      sendPose(source.handedness || 'right', pos, ori, grip, trigger);
-      break;  // 한 손만 전송
-    }
+  const sources = Array.from(xrSession.inputSources);
+  const source = (
+    sources.find(item => item.handedness === 'right' && item.gripSpace)
+    || sources.find(item => item.gripSpace)
+  );
+  if (!source) {
+    trackingLossCount += 1;
+    document.getElementById('track-status').textContent =
+      '🟡 controller source 없음';
+    return;
   }
+
+  const pose = frame.getPose(source.gripSpace, refSpace);
+  if (!pose) {
+    trackingLossCount += 1;
+    document.getElementById('track-status').textContent =
+      '🟡 controller pose 추적 손실';
+    return;
+  }
+  validPoseCount += 1;
+  if (lastValidPoseTimeMs !== null) {
+    maxPoseGapMs = Math.max(
+      maxPoseGapMs,
+      Math.max(0, time - lastValidPoseTimeMs)
+    );
+  }
+  lastValidPoseTimeMs = time;
+
+  const pos = pose.transform.position;
+  const ori = pose.transform.orientation;
+
+  // 버튼: 0=trigger, 1=grip
+  let grip = false;
+  let trigger = false;
+  if (source.gamepad) {
+    trigger = readTriggerButton(
+      source.gamepad.buttons[0],
+      source.handedness
+    );
+    grip = readGripButton(source.gamepad.buttons[1], source.handedness);
+  }
+
+  document.getElementById('vr-pos').textContent =
+    `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
+  document.getElementById('grip-status').textContent =
+    grip ? '🟢 누름' : '⚪ 해제';
+  document.getElementById('trigger-status').textContent =
+    trigger ? '🟠 누름' : '⚪ 해제';
+
+  sendPose(source.handedness || 'right', pos, ori, grip, trigger);
 }
 
 // ──────────────────────────────────────────
 //  초기화
 // ──────────────────────────────────────────
 connectWS();
+setInterval(sendClientTelemetry, 1000);
 </script>
 </body>
 </html>

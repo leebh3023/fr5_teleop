@@ -11,6 +11,7 @@ include setup.sh
 recursive-include certs .gitkeep
 recursive-include deploy *.yaml *.service
 recursive-include docs *.md
+prune docs/agent
 recursive-include tests *.py *.sh
 recursive-include web *.html
 prune fairino-python-sdk-main

@@ -163,6 +163,10 @@ class TeleopConfig:
             raise ValueError("max_ws_message_bytes is too small")
         if not self.web_dir.joinpath("index.html").is_file():
             raise ValueError(f"WebXR UI not found: {self.web_dir / 'index.html'}")
+        if not self.web_dir.joinpath("monitor.html").is_file():
+            raise ValueError(
+                f"operator monitor not found: {self.web_dir / 'monitor.html'}"
+            )
         if not self.dry_run and not self.sdk_path.joinpath("fairino", "Robot.py").is_file():
             raise ValueError(f"Fairino Linux SDK not found: {self.sdk_path}")
         if (self.tls_cert_path is None) != (self.tls_key_path is None):

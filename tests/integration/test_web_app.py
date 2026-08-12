@@ -50,6 +50,9 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
         async with TestClient(server) as client:
             live = await client.get("/health/live")
             assert live.status == 200
+            monitor = await client.get("/monitor")
+            assert monitor.status == 200
+            assert "VR Teleop 현장 모니터" in await monitor.text()
 
             ws = await client.ws_connect("/ws")
             hello = await receive_type(ws, "hello")
@@ -68,6 +71,35 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
             assert idle["gripper_enabled"] is False
             assert idle["gripper_busy"] is False
             assert idle["gripper_position"] == 0
+
+            await ws.send_json(
+                {
+                    "version": 1,
+                    "type": "telemetry",
+                    "session_id": session_id,
+                    "seq": 0,
+                    "client_time_ms": 1000.0,
+                    "xr_frame_count": 90,
+                    "valid_pose_count": 89,
+                    "pose_send_count": 89,
+                    "pose_drop_count": 0,
+                    "tracking_loss_count": 1,
+                    "max_xr_frame_gap_ms": 14.0,
+                    "max_pose_gap_ms": 28.0,
+                    "ws_buffered_amount": 0,
+                    "last_rtt_ms": 5.0,
+                    "max_rtt_ms": 7.5,
+                }
+            )
+            telemetry_ack = await receive_type(ws, "telemetry_ack")
+            assert telemetry_ack["seq"] == 0
+            telemetry_status = await receive_status(
+                ws,
+                lambda status: (
+                    status.get("client_telemetry", {}).get("seq") == 0
+                ),
+            )
+            assert telemetry_status["client_telemetry"]["max_rtt_ms"] == 7.5
 
             def pose(seq: int, grip: bool, x: float = 0.0) -> dict:
                 return {

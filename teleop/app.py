@@ -16,6 +16,7 @@ from teleop.config import TeleopConfig
 from teleop.controller_lease import ControllerLease
 from teleop.protocol import (
     PROTOCOL_VERSION,
+    ClientTelemetry,
     ControlEvent,
     PoseMessage,
     ProtocolError,
@@ -112,6 +113,9 @@ class TeleopRuntime:
         self.supervisor_fault: str | None = None
         self._watchdog_handled = False
         self._pose_diagnostics: dict[str, PoseStreamDiagnostics] = {}
+        self._client_telemetry: dict[str, ClientTelemetry] = {}
+        self._telemetry_last_log_ns: dict[str, int] = {}
+        self._telemetry_last_warning_ns: dict[str, int] = {}
 
     async def start(self) -> None:
         self.supervisor.start()
@@ -121,7 +125,6 @@ class TeleopRuntime:
 
     async def stop(self) -> None:
         self.supervisor.invalidate_pose()
-        self.supervisor.send_control(ControlCommand.SHUTDOWN)
         if self.status_task is not None:
             self.status_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -140,6 +143,9 @@ class TeleopRuntime:
     async def unregister(self, session_id: str) -> None:
         self.clients.pop(session_id, None)
         diagnostics = self._pose_diagnostics.pop(session_id, None)
+        telemetry = self._client_telemetry.pop(session_id, None)
+        self._telemetry_last_log_ns.pop(session_id, None)
+        self._telemetry_last_warning_ns.pop(session_id, None)
         if diagnostics is not None:
             summary = diagnostics.take_summary(time.monotonic_ns(), force=True)
             if summary is not None:
@@ -153,6 +159,21 @@ class TeleopRuntime:
                     summary["max_client_gap_ms"],
                     summary["window_ms"],
                 )
+        if telemetry is not None:
+            log.info(
+                "client telemetry final session=%s telemetry_seq=%d "
+                "xr_frames=%d valid_poses=%d sent=%d drops=%d "
+                "tracking_losses=%d last_rtt_ms=%s max_rtt_ms=%s",
+                session_id[:8],
+                telemetry.seq,
+                telemetry.xr_frame_count,
+                telemetry.valid_pose_count,
+                telemetry.pose_send_count,
+                telemetry.pose_drop_count,
+                telemetry.tracking_loss_count,
+                telemetry.last_rtt_ms,
+                telemetry.max_rtt_ms,
+            )
         if self.lease.release(session_id):
             self.supervisor.invalidate_pose()
             self.supervisor.send_control(ControlCommand.SESSION_LOST)
@@ -221,6 +242,122 @@ class TeleopRuntime:
                 summary["window_ms"],
             )
 
+    def record_client_telemetry(self, message: ClientTelemetry) -> None:
+        previous = self._client_telemetry.get(message.session_id)
+        if previous is not None and message.seq <= previous.seq:
+            raise ProtocolError("telemetry sequence must increase")
+
+        pose_drop_delta = max(
+            0,
+            (
+                message.pose_drop_count - previous.pose_drop_count
+                if previous is not None
+                else message.pose_drop_count
+            ),
+        )
+        tracking_loss_delta = max(
+            0,
+            (
+                message.tracking_loss_count
+                - previous.tracking_loss_count
+                if previous is not None
+                else message.tracking_loss_count
+            ),
+        )
+        self._client_telemetry[message.session_id] = message
+
+        warning_threshold_ms = max(
+            50.0,
+            self.config.pose_timeout_s * 500,
+        )
+        degraded = (
+            pose_drop_delta > 0
+            or tracking_loss_delta > 0
+            or message.max_xr_frame_gap_ms >= warning_threshold_ms
+            or message.max_pose_gap_ms >= warning_threshold_ms
+            or (
+                message.max_rtt_ms is not None
+                and message.max_rtt_ms >= warning_threshold_ms
+            )
+            or message.ws_buffered_amount >= 64 * 1024
+        )
+        suspected_causes: list[str] = []
+        if (
+            message.max_rtt_ms is not None
+            and message.max_rtt_ms >= warning_threshold_ms
+        ) or message.ws_buffered_amount >= 64 * 1024 or pose_drop_delta > 0:
+            suspected_causes.append("wifi_tcp_or_backpressure")
+        if message.max_xr_frame_gap_ms >= warning_threshold_ms:
+            suspected_causes.append("quest_frame_or_main_thread")
+        if (
+            tracking_loss_delta > 0
+            or message.max_pose_gap_ms >= warning_threshold_ms
+        ):
+            suspected_causes.append("controller_tracking")
+        suspected = ",".join(suspected_causes) or "none"
+        now_ns = message.received_ns
+        last_warning_ns = self._telemetry_last_warning_ns.get(
+            message.session_id,
+            0,
+        )
+        if degraded and (
+            last_warning_ns == 0
+            or now_ns - last_warning_ns >= 1_000_000_000
+        ):
+            log.warning(
+                "client telemetry degraded session=%s telemetry_seq=%d "
+                "xr_gap_ms=%.1f pose_gap_ms=%.1f last_rtt_ms=%s "
+                "max_rtt_ms=%s buffered_bytes=%d pose_drop_delta=%d "
+                "tracking_loss_delta=%d suspected=%s",
+                message.session_id[:8],
+                message.seq,
+                message.max_xr_frame_gap_ms,
+                message.max_pose_gap_ms,
+                message.last_rtt_ms,
+                message.max_rtt_ms,
+                message.ws_buffered_amount,
+                pose_drop_delta,
+                tracking_loss_delta,
+                suspected,
+            )
+            self._telemetry_last_warning_ns[message.session_id] = now_ns
+
+        last_log_ns = self._telemetry_last_log_ns.get(message.session_id, 0)
+        if last_log_ns == 0 or now_ns - last_log_ns >= 10_000_000_000:
+            log.info(
+                "client telemetry summary session=%s telemetry_seq=%d "
+                "xr_frames=%d valid_poses=%d sent=%d drops=%d "
+                "tracking_losses=%d xr_gap_ms=%.1f pose_gap_ms=%.1f "
+                "last_rtt_ms=%s max_rtt_ms=%s buffered_bytes=%d",
+                message.session_id[:8],
+                message.seq,
+                message.xr_frame_count,
+                message.valid_pose_count,
+                message.pose_send_count,
+                message.pose_drop_count,
+                message.tracking_loss_count,
+                message.max_xr_frame_gap_ms,
+                message.max_pose_gap_ms,
+                message.last_rtt_ms,
+                message.max_rtt_ms,
+                message.ws_buffered_amount,
+            )
+            self._telemetry_last_log_ns[message.session_id] = now_ns
+
+    def _controller_telemetry_payload(self) -> dict[str, Any] | None:
+        controller_id = self.lease.session_id
+        if controller_id is None:
+            return None
+        telemetry = self._client_telemetry.get(controller_id)
+        if telemetry is None:
+            return None
+        payload = telemetry.to_status_dict()
+        payload["age_ms"] = max(
+            0.0,
+            (time.monotonic_ns() - telemetry.received_ns) / 1_000_000,
+        )
+        return payload
+
     def status_payload(self, status: WorkerStatus | None = None) -> dict[str, Any]:
         current = status or self.supervisor.latest_status
         health = self.supervisor.health()
@@ -239,6 +376,7 @@ class TeleopRuntime:
                     else self.config.gripper.open_position
                 ),
                 "controller_id": self.lease.session_id,
+                "client_telemetry": self._controller_telemetry_payload(),
                 "ack_seq": self.lease.last_seq if self.lease.last_seq >= 0 else None,
                 "worker": {
                     "generation": health.generation,
@@ -254,6 +392,7 @@ class TeleopRuntime:
                 "version": PROTOCOL_VERSION,
                 "type": "status",
                 "controller_id": self.lease.session_id,
+                "client_telemetry": self._controller_telemetry_payload(),
                 "ack_seq": self.lease.last_seq if self.lease.last_seq >= 0 else None,
                 "worker": {
                     "generation": health.generation,
@@ -326,6 +465,12 @@ def _runtime(request: web.Request) -> TeleopRuntime:
 
 async def index_handler(request: web.Request) -> web.StreamResponse:
     return web.FileResponse(_runtime(request).config.web_dir / "index.html")
+
+
+async def monitor_handler(request: web.Request) -> web.StreamResponse:
+    return web.FileResponse(
+        _runtime(request).config.web_dir / "monitor.html"
+    )
 
 
 async def live_handler(request: web.Request) -> web.Response:
@@ -433,8 +578,24 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
 async def _handle_client_message(
     runtime: TeleopRuntime,
     ws: web.WebSocketResponse,
-    message: PoseMessage | ControlEvent,
+    message: PoseMessage | ControlEvent | ClientTelemetry,
 ) -> None:
+    if isinstance(message, ClientTelemetry):
+        if not runtime.lease.owns(message.session_id):
+            raise ProtocolError(
+                "only the controller may publish client telemetry"
+            )
+        runtime.record_client_telemetry(message)
+        await ws.send_json(
+            {
+                "version": PROTOCOL_VERSION,
+                "type": "telemetry_ack",
+                "seq": message.seq,
+                "client_time_ms": message.client_time_ms,
+            }
+        )
+        return
+
     if isinstance(message, ControlEvent):
         if message.event in {"claim_control", "webxr_started"}:
             granted = runtime.lease.claim(message.session_id)
@@ -498,6 +659,7 @@ def create_app(config: TeleopConfig) -> web.Application:
     app[RUNTIME_KEY] = TeleopRuntime(config)
     app.cleanup_ctx.append(_application_context)
     app.router.add_get("/", index_handler)
+    app.router.add_get("/monitor", monitor_handler)
     app.router.add_get("/health/live", live_handler)
     app.router.add_get("/health/ready", ready_handler)
     app.router.add_get("/ws", websocket_handler)

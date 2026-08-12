@@ -61,6 +61,7 @@ Python worker는 일반 thread가 아니라 process로 둔다. 첨부 SDK의 여
 - `server.py`: `teleop.__main__`을 호출하는 얇은 호환 entry point
 - `teleop/`: protocol, 계산, aiohttp, IPC, robot adapter, worker/supervisor 구현
 - `web/index.html`: protocol v1, controller lease, backpressure를 사용하는 Quest WebXR UI
+- `web/monitor.html`: control lease를 claim하지 않는 작업자용 외부 상태 화면
 - `tests/`: unit, process integration, WebSocket integration, server smoke test
 - `setup.sh`: Ubuntu 22.04 virtualenv, 고정 의존성, 테스트, dry-run smoke를 수행하는 설치 스크립트
 - `fairino-python-sdk-main/`: Windows/Linux SDK, 예제, build 산출물이 섞인 vendor tree
@@ -310,6 +311,12 @@ status 메시지는 pose마다 회신하지 않고 기본 10 Hz로 제한한다.
 
 브라우저는 `WebSocket.bufferedAmount` 상한을 확인한다. 상한을 넘으면 새 pose를 보내지 않고 다음 frame의 최신 pose로 대체한다. 과거 pose를 나중에 몰아서 재생하지 않는다.
 
+Quest client는 1초마다 별도 telemetry를 보낸다. 누적 XR frame,
+유효 controller pose, pose send/drop, tracking loss와 구간 최대 XR/pose
+gap, `bufferedAmount`, telemetry RTT를 포함한다. 이 값은 robot motion
+입력으로 사용하지 않으며 원인 분리와 작업자 monitor에만 사용한다.
+telemetry sequence는 pose sequence와 독립적으로 증가한다.
+
 ## controller lease 설계
 
 - 동시에 여러 WebSocket이 접속할 수 있지만 controller는 한 session만 허용한다.
@@ -499,13 +506,19 @@ vendor `Robot.py`를 직접 수정하지 않는다. 꼭 patch해야 하면 원�
 - `bufferedAmount` 기반 backpressure와 drop counter 표시
 - trigger에도 analog hysteresis를 적용하고 그리퍼 enabled/busy/position
   및 `GRIPPER_ACTION`을 표시
+- XR frame, controller pose, tracking loss, pose send/drop,
+  `bufferedAmount`와 application RTT를 1초 telemetry로 보고
 - WebXR `end`에서 `webxr_ended` control event 전송
 - WebSocket 재연결 뒤 기존 grip 상태로 자동 재개하지 않음
 - server의 `IDLE/SLEEPING/ARMING/ACTIVE/STOPPING/FAULT`를 UI에 구분 표시
 - stale input, worker fault, controller busy, TLS 오류를 사용자에게 보이게 표시
 - status를 pose acknowledgement가 아닌 독립 stream으로 처리
 
-VR 내부 화면이 비어 있어도 fault와 tracking 상태를 작업자가 확인할 별도 모니터 UI 또는 명확한 시청각 피드백을 추후 고려한다.
+Quest immersive 화면의 상태 표시에 안전 판단을 의존하지 않는다.
+`web/monitor.html`은 별도 observer WebSocket으로 robot state, rearm,
+fault, input age, Quest telemetry, worker jitter/SDK/missed tick과
+servo lifecycle count를 표시한다. monitor는 controller lease를
+claim하거나 control message를 보내지 않는다.
 
 ## 안전 불변조건
 
@@ -535,6 +548,7 @@ VR 내부 화면이 비어 있어도 fault와 tracking 상태를 작업자가 �
 - `/health/live`: aiohttp event loop가 응답 가능한지
 - `/health/ready`: config, worker, SDK 연결 상태가 요청한 mode에서 준비됐는지
 - `/ws`: versioned WebSocket
+- `/monitor`: 작업자용 read-only browser monitor
 
 로그에는 다음을 포함한다.
 
@@ -557,6 +571,10 @@ servo_jitter_ms p50/p95/p99/max
 sdk_call_ms p50/p95/p99/max
 pose_age_ms
 pose_drop_count
+client_rtt_ms
+xr_frame_gap_ms
+controller_pose_gap_ms
+tracking_loss_count
 ws_client_count
 worker_restart_count
 fault_count by reason
@@ -668,6 +686,7 @@ fault_count by reason
 - observer status
 - WebSocket reconnect
 - client/server backpressure
+- client telemetry schema/sequence/ack와 observer monitor
 - TLS와 static UI
 
 ### WSL smoke
@@ -760,6 +779,9 @@ systemd: vr-teleop.service
 ## agent 작업 절차
 
 1. 변경 전에 이 문서와 관련 모듈을 읽고 실제 robot 연결 여부를 확인한다.
+   VR reference resampling, trajectory smoothing 또는 jitter 변경은 내부
+   `docs/agent/ROBOTIS_VR_TELEOP_STRATEGY_KO.md`도 먼저 읽는다. 이 경로는
+   agent 전용이며 release package에 포함하지 않는다.
 2. 기본 명령은 dry-run/fake여야 한다.
 3. vendor example이나 실제 robot command를 자동 실행하지 않는다.
 4. SDK 관련 조사에서는 전체 vendor tree를 무작정 검색하지 말고 `linux/fairino/Robot.py`와 필요한 example만 제한적으로 본다.

@@ -34,6 +34,10 @@ ARCHIVE_CONTENTS="${VERIFY_DIR}/archive-contents.txt"
 tar -tzf "${ARCHIVE}" > "${ARCHIVE_CONTENTS}"
 grep -q "docs/FIELD_MANUAL_KO.md" "${ARCHIVE_CONTENTS}"
 grep -q "requirements-lock.txt" "${ARCHIVE_CONTENTS}"
+if grep -q "docs/agent/" "${ARCHIVE_CONTENTS}"; then
+    echo "internal agent documentation found in source archive" >&2
+    exit 1
+fi
 if grep -Eq '\.(pem|key)$' "${ARCHIVE_CONTENTS}"; then
     echo "secret-like certificate or key file found in source archive" >&2
     exit 1
