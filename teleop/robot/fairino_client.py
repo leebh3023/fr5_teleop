@@ -5,6 +5,7 @@ import inspect
 import logging
 import platform
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -302,8 +303,11 @@ class FairinoRobotClient:
 
     def reset_fault(self) -> None:
         self._call_zero("ResetAllError")
+        time.sleep(0.1)
         self._call_zero("Mode", 0)
+        time.sleep(0.1)
         self._call_zero("RobotEnable", 1)
+        time.sleep(0.2)
 
     def close(self) -> None:
         if self._robot is None:

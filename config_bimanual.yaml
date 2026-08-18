@@ -1,4 +1,6 @@
-# Safe local default. Hardware mode still requires --confirm-hardware.
+# Bimanual (dual-arm) configuration example.
+# Uses robot.arms instead of robot.ip for two independent FR5 robots.
+
 runtime:
   dry_run: false
   log_level: INFO
@@ -17,13 +19,16 @@ tls:
   key_path: certs/key.pem
 
 robot:
-  ip: 192.168.58.2
   sdk_path: /home/user/fairino-python-sdk-2.0.8_robot3.7.8/linux
   exaxis_default: [0.0, 0.0, 0.0, 0.0]
+  arms:
+    left:
+      ip: 192.168.58.2
+    right:
+      ip: 192.168.58.3
 
 timing:
   servo_period_s: 0.008
-  # ERROR log after this many start/end events occur inside the window.
   servo_transition_window_s: 1.0
   servo_transition_limit: 4
   pose_timeout_s: 0.500
@@ -34,7 +39,6 @@ timing:
 motion:
   position_scale: 800.0
   ema_alpha: 0.2
-  # Time-based speed limit. max_step_mm remains a per-command safety cap.
   max_velocity_mm_s: 150.0
   max_step_mm: 2.0
   workspace:
@@ -42,8 +46,7 @@ motion:
     y: [-600.0, 600.0]
     z: [50.0, 700.0]
 
-# Disabled by default. Enable only after controller-side gripper configuration
-# and a low-risk trigger/gripper commissioning test.
+# Global gripper defaults. Per-arm overrides can be set in robot.arms.<hand>.gripper.
 gripper:
   enabled: true
   index: 1

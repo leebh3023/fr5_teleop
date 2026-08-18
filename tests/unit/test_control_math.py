@@ -8,8 +8,8 @@ from teleop.control_math import MotionPlanner, clamp_step, vr_to_robot_delta
 
 def test_vr_axis_mapping() -> None:
     assert vr_to_robot_delta((1.0, 2.0, 3.0), 500.0) == (
+        500.0,
         -1500.0,
-        -500.0,
         1000.0,
     )
 

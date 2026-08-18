@@ -267,11 +267,15 @@ function sendEvent(event) {
   }));
 }
 
+// hand별 독립 시퀀스 카운터 (bimanual 모드)
+const handPoseSeq = { left: 0, right: 0 };
+
 function sendPose(hand, pos, ori, grip, trigger) {
   if (!ws || ws.readyState !== WebSocket.OPEN || !sessionId || !controllerOwned) return;
-  // 전송을 생략한 frame도 sequence를 소비해 서버가 client-side drop을
-  // pose sequence gap으로 진단할 수 있게 한다.
-  const seq = poseSeq++;
+  // hand별 독립 시퀀스. 서버는 hand별로 seq를 추적.
+  const effectiveHand = hand || 'right';
+  if (!(effectiveHand in handPoseSeq)) handPoseSeq[effectiveHand] = 0;
+  const seq = handPoseSeq[effectiveHand]++;
   if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
     poseDropCount += 1;
     return;
@@ -282,7 +286,7 @@ function sendPose(hand, pos, ori, grip, trigger) {
     session_id: sessionId,
     seq: seq,
     client_time_ms: performance.now(),
-    hand: hand,
+    hand: effectiveHand,
     position_m: [pos.x, pos.y, pos.z],
     orientation_xyzw: [ori.x, ori.y, ori.z, ori.w],
     grip: grip,
@@ -509,55 +513,54 @@ function onXRFrame(time, frame) {
   }
 
   const sources = Array.from(xrSession.inputSources);
-  const source = (
-    sources.find(item => item.handedness === 'right' && item.gripSpace)
-    || sources.find(item => item.gripSpace)
-  );
-  if (!source) {
-    trackingLossCount += 1;
-    document.getElementById('track-status').textContent =
-      '🟡 controller source 없음';
-    return;
-  }
+  // 양손 컨트롤러 동시 전송 (bimanual 모드)
+  let anyPoseFound = false;
+  for (const source of sources) {
+    if (!source.gripSpace) continue;
+    const pose = frame.getPose(source.gripSpace, refSpace);
+    if (!pose) continue;
+    anyPoseFound = true;
+    validPoseCount += 1;
+    if (lastValidPoseTimeMs !== null) {
+      maxPoseGapMs = Math.max(
+        maxPoseGapMs,
+        Math.max(0, time - lastValidPoseTimeMs)
+      );
+    }
+    lastValidPoseTimeMs = time;
 
-  const pose = frame.getPose(source.gripSpace, refSpace);
-  if (!pose) {
+    const pos = pose.transform.position;
+    const ori = pose.transform.orientation;
+    const hand = source.handedness || 'right';
+
+    // 버튼: 0=trigger, 1=grip
+    let grip = false;
+    let trigger = false;
+    if (source.gamepad) {
+      trigger = readTriggerButton(source.gamepad.buttons[0], hand);
+      grip = readGripButton(source.gamepad.buttons[1], hand);
+    }
+
+    // 마지막으로 읽은 컨트롤러 정보를 UI에 표시 (right 우선)
+    if (hand === 'right' || !anyPoseFound) {
+      document.getElementById('vr-pos').textContent =
+        `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
+      document.getElementById('grip-status').textContent =
+        grip ? '🟢 누름' : '⚪ 해제';
+      document.getElementById('trigger-status').textContent =
+        trigger ? '🟠 누름' : '⚪ 해제';
+    }
+
+    sendPose(hand, pos, ori, grip, trigger);
+  }
+  if (!anyPoseFound) {
     trackingLossCount += 1;
     document.getElementById('track-status').textContent =
       '🟡 controller pose 추적 손실';
-    return;
+  } else {
+    document.getElementById('track-status').textContent =
+      '🟢 트래킹 활성';
   }
-  validPoseCount += 1;
-  if (lastValidPoseTimeMs !== null) {
-    maxPoseGapMs = Math.max(
-      maxPoseGapMs,
-      Math.max(0, time - lastValidPoseTimeMs)
-    );
-  }
-  lastValidPoseTimeMs = time;
-
-  const pos = pose.transform.position;
-  const ori = pose.transform.orientation;
-
-  // 버튼: 0=trigger, 1=grip
-  let grip = false;
-  let trigger = false;
-  if (source.gamepad) {
-    trigger = readTriggerButton(
-      source.gamepad.buttons[0],
-      source.handedness
-    );
-    grip = readGripButton(source.gamepad.buttons[1], source.handedness);
-  }
-
-  document.getElementById('vr-pos').textContent =
-    `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
-  document.getElementById('grip-status').textContent =
-    grip ? '🟢 누름' : '⚪ 해제';
-  document.getElementById('trigger-status').textContent =
-    trigger ? '🟠 누름' : '⚪ 해제';
-
-  sendPose(source.handedness || 'right', pos, ori, grip, trigger);
 }
 
 // ──────────────────────────────────────────

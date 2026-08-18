@@ -116,7 +116,15 @@ def main(argv: list[str] | None = None) -> None:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(config.tls_cert_path, config.tls_key_path)
 
-    mode = "DRY-RUN" if config.dry_run else f"HARDWARE {config.robot_ip}"
+    if config.arms:
+        arm_desc = ", ".join(
+            f"{a.hand}={a.robot_ip or 'dry-run'}" for a in config.arms
+        )
+        mode = f"BIMANUAL [{arm_desc}]" if not config.dry_run else f"DRY-RUN BIMANUAL [{arm_desc}]"
+    elif config.dry_run:
+        mode = "DRY-RUN"
+    else:
+        mode = f"HARDWARE {config.robot_ip}"
     logging.getLogger(__name__).info(
         "starting teleop mode=%s url=%s://%s:%d",
         mode,

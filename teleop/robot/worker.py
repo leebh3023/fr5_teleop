@@ -275,16 +275,15 @@ class RobotWorkerRuntime:
                     self.spec.generation,
                 )
                 continue
-            if self.state != WorkerState.ACTIVE or not fresh or not pose.grip:
+            if pose.grip or self.state not in {WorkerState.SLEEPING, WorkerState.IDLE}:
                 log.info(
-                    "trigger ignored generation=%d state=%s fresh=%s grip=%s",
+                    "trigger ignored because grip is active generation=%d state=%s grip=%s",
                     self.spec.generation,
                     self.state.value,
-                    fresh,
                     pose.grip,
                 )
                 continue
-            self._begin_gripper_action(now_ns)
+            self._begin_gripper_idle_action(now_ns)
 
     def _handle_grip_events(
         self,
@@ -385,6 +384,7 @@ class RobotWorkerRuntime:
         self.reason = "grip_rising_edge"
         self._publish_status(now_ns, self.reason)
         try:
+            self._timed_call(self.client.reset_fault)
             self.robot_tcp = self._timed_call(self.client.get_current_tcp)
             self.planner.engage(pose.position_m, self.robot_tcp)
             self._timed_call(self.client.servo_start)
@@ -456,6 +456,32 @@ class RobotWorkerRuntime:
                 fault_after=exc,
             )
 
+    def _begin_gripper_idle_action(self, now_ns: int) -> None:
+        target = (
+            self.config.gripper.open_position
+            if self.gripper_closed
+            else self.config.gripper.closed_position
+        )
+        old_state = self.state
+        self.state = WorkerState.GRIPPER_ACTION
+        self.reason = "gripper_moving"
+        self._publish_status(now_ns, self.reason)
+        try:
+            self._timed_call(self.client.move_gripper, target)
+        except Exception as exc:
+            self._enter_fault("gripper_command_failed", exc)
+            return
+
+        command_completed_ns = time.monotonic_ns()
+        self.gripper_position = target
+        self.gripper_closed = (target == self.config.gripper.closed_position)
+        self.pending_gripper_position = None
+        self.counters.gripper_command_count += 1
+        self.counters.gripper_complete_count += 1
+        self.state = old_state
+        self.reason = "gripper_complete"
+        self._publish_status(command_completed_ns, self.reason)
+
     def _begin_gripper_action(self, now_ns: int) -> None:
         target = (
             self.config.gripper.open_position
@@ -476,14 +502,14 @@ class RobotWorkerRuntime:
             return
 
         command_completed_ns = time.monotonic_ns()
-        self.pending_gripper_position = target
-        self.gripper_deadline_ns = command_completed_ns + int(
-            self.config.gripper.action_timeout_s * 1_000_000_000
-        )
-        self.next_gripper_poll_ns = command_completed_ns
-        self.session_lost_during_gripper = False
+        self.gripper_position = target
+        self.gripper_closed = (target == self.config.gripper.closed_position)
+        self.pending_gripper_position = None
         self.counters.gripper_command_count += 1
-        self.reason = "gripper_moving"
+        self.counters.gripper_complete_count += 1
+        self.require_release = False
+        self.last_grip = False
+        self.reason = "gripper_complete"
         self._publish_status(command_completed_ns, self.reason)
 
     def _poll_gripper(self, now_ns: int) -> None:

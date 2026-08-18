@@ -110,8 +110,12 @@ class TeleopRuntime:
         self.lease = ControllerLease()
         self.clients: dict[str, web.WebSocketResponse] = {}
         self.status_task: asyncio.Task[None] | None = None
-        self.supervisor_fault: str | None = None
-        self._watchdog_handled = False
+        self.supervisor_fault: dict[str, str | None] = {
+            h: None for h in self.supervisor.hands
+        }
+        self._watchdog_handled: dict[str, bool] = {
+            h: False for h in self.supervisor.hands
+        }
         self._pose_diagnostics: dict[str, PoseStreamDiagnostics] = {}
         self._client_telemetry: dict[str, ClientTelemetry] = {}
         self._telemetry_last_log_ns: dict[str, int] = {}
@@ -360,8 +364,14 @@ class TeleopRuntime:
 
     def status_payload(self, status: WorkerStatus | None = None) -> dict[str, Any]:
         current = status or self.supervisor.latest_status
-        health = self.supervisor.health()
+        health_map = self.supervisor.health()
+        # Combine faults from all arms
+        any_fault = any(f for f in self.supervisor_fault.values())
+        combined_fault = "; ".join(
+            f"{h}: {f}" for h, f in self.supervisor_fault.items() if f
+        ) or None
         if current is None:
+            first_health = next(iter(health_map.values()), None)
             return {
                 "version": PROTOCOL_VERSION,
                 "type": "status",
@@ -379,14 +389,25 @@ class TeleopRuntime:
                 "client_telemetry": self._controller_telemetry_payload(),
                 "ack_seq": self.lease.last_seq if self.lease.last_seq >= 0 else None,
                 "worker": {
-                    "generation": health.generation,
-                    "alive": health.alive,
-                    "heartbeat_age_ms": health.heartbeat_age_ms,
-                    "hung": health.hung,
+                    "generation": first_health.generation if first_health else 0,
+                    "alive": first_health.alive if first_health else False,
+                    "heartbeat_age_ms": first_health.heartbeat_age_ms if first_health else None,
+                    "hung": first_health.hung if first_health else False,
                 },
-                "fault": self.supervisor_fault,
+                "arms": {
+                    h: {
+                        "generation": hv.generation,
+                        "alive": hv.alive,
+                        "heartbeat_age_ms": hv.heartbeat_age_ms,
+                        "hung": hv.hung,
+                        "fault": self.supervisor_fault.get(h),
+                    }
+                    for h, hv in health_map.items()
+                },
+                "fault": combined_fault,
             }
         payload = current.to_dict()
+        first_health = next(iter(health_map.values()), None)
         payload.update(
             {
                 "version": PROTOCOL_VERSION,
@@ -395,17 +416,27 @@ class TeleopRuntime:
                 "client_telemetry": self._controller_telemetry_payload(),
                 "ack_seq": self.lease.last_seq if self.lease.last_seq >= 0 else None,
                 "worker": {
-                    "generation": health.generation,
-                    "alive": health.alive,
-                    "heartbeat_age_ms": health.heartbeat_age_ms,
-                    "hung": health.hung,
+                    "generation": first_health.generation if first_health else 0,
+                    "alive": first_health.alive if first_health else False,
+                    "heartbeat_age_ms": first_health.heartbeat_age_ms if first_health else None,
+                    "hung": first_health.hung if first_health else False,
+                },
+                "arms": {
+                    h: {
+                        "generation": hv.generation,
+                        "alive": hv.alive,
+                        "heartbeat_age_ms": hv.heartbeat_age_ms,
+                        "hung": hv.hung,
+                        "fault": self.supervisor_fault.get(h),
+                    }
+                    for h, hv in health_map.items()
                 },
             }
         )
-        if self.supervisor_fault:
+        if any_fault:
             payload["state"] = WorkerState.FAULT.value
             payload["tracking"] = False
-            payload["fault"] = self.supervisor_fault
+            payload["fault"] = combined_fault
         return payload
 
     async def broadcast(self, payload: dict[str, Any]) -> None:
@@ -424,34 +455,49 @@ class TeleopRuntime:
     async def _status_loop(self) -> None:
         interval = 1.0 / self.config.status_hz
         while True:
-            statuses = self.supervisor.drain_status()
-            if statuses:
-                await self.broadcast(self.status_payload(statuses[-1]))
-            else:
-                await self.broadcast(self.status_payload())
+            all_statuses = self.supervisor.drain_status()
+            # Find any latest status to broadcast
+            last_status: WorkerStatus | None = None
+            for hand_statuses in all_statuses.values():
+                if hand_statuses:
+                    last_status = hand_statuses[-1]
+            await self.broadcast(self.status_payload(last_status))
 
-            health = self.supervisor.health()
-            if health.hung and not self._watchdog_handled:
-                self._watchdog_handled = True
-                self.supervisor_fault = "robot_worker_watchdog_timeout"
-                self.supervisor.invalidate_pose()
-                owner = self.lease.session_id
-                if owner:
-                    self.lease.release(owner)
-                log.error(
-                    "robot worker heartbeat timed out after %.1f ms",
-                    health.heartbeat_age_ms or -1,
-                )
-                report = await asyncio.to_thread(self.supervisor.shutdown)
-                log.error("hung robot worker contained: %s", report)
-                await self.broadcast(self.status_payload())
-            elif not health.alive and not self._watchdog_handled:
-                self._watchdog_handled = True
-                self.supervisor_fault = "robot_worker_exited"
-                owner = self.lease.session_id
-                if owner:
-                    self.lease.release(owner)
-                await self.broadcast(self.status_payload())
+            health_map = self.supervisor.health()
+            for hand, hv in health_map.items():
+                if hv.hung and not self._watchdog_handled.get(hand, False):
+                    self._watchdog_handled[hand] = True
+                    self.supervisor_fault[hand] = "robot_worker_watchdog_timeout"
+                    self.supervisor.invalidate_pose(hand=hand)
+                    log.error(
+                        "robot worker heartbeat timed out hand=%s after %.1f ms",
+                        hand,
+                        hv.heartbeat_age_ms or -1,
+                    )
+                    # Only release lease if all arms are faulted or this is the only arm
+                    all_faulted = all(
+                        self._watchdog_handled.get(h, False) for h in health_map
+                    )
+                    if all_faulted:
+                        owner = self.lease.session_id
+                        if owner:
+                            self.lease.release(owner)
+                    report = await asyncio.to_thread(
+                        self.supervisor.shutdown
+                    )
+                    log.error("hung robot worker contained: %s", report)
+                    await self.broadcast(self.status_payload())
+                elif not hv.alive and not self._watchdog_handled.get(hand, False):
+                    self._watchdog_handled[hand] = True
+                    self.supervisor_fault[hand] = "robot_worker_exited"
+                    all_faulted = all(
+                        self._watchdog_handled.get(h, False) for h in health_map
+                    )
+                    if all_faulted:
+                        owner = self.lease.session_id
+                        if owner:
+                            self.lease.release(owner)
+                    await self.broadcast(self.status_payload())
 
             await asyncio.sleep(interval)
 
@@ -479,12 +525,13 @@ async def live_handler(request: web.Request) -> web.Response:
 
 async def ready_handler(request: web.Request) -> web.Response:
     runtime = _runtime(request)
-    health = runtime.supervisor.health()
+    health_map = runtime.supervisor.health()
     status = runtime.supervisor.latest_status
+    all_alive = all(h.alive and not h.hung for h in health_map.values())
+    no_fault = not any(f for f in runtime.supervisor_fault.values())
     ready = (
-        health.alive
-        and not health.hung
-        and runtime.supervisor_fault is None
+        all_alive
+        and no_fault
         and status is not None
         and status.state
         in {
@@ -638,7 +685,7 @@ async def _handle_client_message(
 
     if not runtime.lease.owns(message.session_id):
         raise ProtocolError("this session does not own the controller lease")
-    if not runtime.lease.accept_sequence(message.session_id, message.seq):
+    if not runtime.lease.accept_sequence(message.session_id, message.seq, message.hand):
         raise ProtocolError("pose sequence must increase")
     runtime.record_pose_diagnostics(message)
     runtime.supervisor.publish_pose(message)
