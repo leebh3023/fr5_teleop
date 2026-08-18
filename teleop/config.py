@@ -130,6 +130,17 @@ class TeleopConfig:
             raise ValueError("host must not be empty")
         if not (1 <= self.port <= 65535):
             raise ValueError("port must be in [1, 65535]")
+        if self.arms:
+            hands = tuple(arm.hand for arm in self.arms)
+            if self.robot_ip is not None:
+                raise ValueError("robot.ip cannot be combined with robot.arms")
+            if len(hands) != 2 or set(hands) != {"left", "right"}:
+                raise ValueError(
+                    "robot.arms must configure exactly one left and one right arm"
+                )
+            robot_ips = [arm.robot_ip for arm in self.arms if arm.robot_ip]
+            if len(robot_ips) != len(set(robot_ips)):
+                raise ValueError("robot.arms must use a different IP for each arm")
         if not self.dry_run and not self.robot_ip and not self.arms:
             raise ValueError("robot_ip or arms configuration is required outside dry-run")
         for arm in self.arms:

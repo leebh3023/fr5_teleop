@@ -4,10 +4,11 @@ import logging
 import multiprocessing
 import queue
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Any
 
-from teleop.config import ArmConfig, TeleopConfig
+from teleop.config import TeleopConfig
 from teleop.ipc import WorkerIpc, create_worker_ipc
 from teleop.protocol import PoseMessage
 from teleop.robot.fake_client import FakeRobotBehavior
@@ -67,7 +68,9 @@ class RobotSupervisor:
         config: TeleopConfig,
         *,
         robot_kind: str | None = None,
-        fake_behavior: FakeRobotBehavior | None = None,
+        fake_behavior: (
+            FakeRobotBehavior | Mapping[str, FakeRobotBehavior] | None
+        ) = None,
     ) -> None:
         self.config = config
         self.robot_kind = robot_kind or ("fake" if config.dry_run else "fairino")
@@ -83,6 +86,7 @@ class RobotSupervisor:
                 arm_teleop = replace(
                     config,
                     robot_ip=arm_cfg.robot_ip,
+                    arms=(),
                     gripper=arm_cfg.gripper,
                     workspace=arm_cfg.workspace,
                     exaxis_default=arm_cfg.exaxis_default,
@@ -91,7 +95,7 @@ class RobotSupervisor:
                     hand=arm_cfg.hand,
                     config=arm_teleop,
                     robot_kind=self.robot_kind,
-                    fake_behavior=self.fake_behavior,
+                    fake_behavior=self._fake_behavior_for(arm_cfg.hand),
                     context=self._context,
                 )
         else:
@@ -100,7 +104,7 @@ class RobotSupervisor:
                 hand=SINGLE_ARM_HAND,
                 config=config,
                 robot_kind=self.robot_kind,
-                fake_behavior=self.fake_behavior,
+                fake_behavior=self._fake_behavior_for(SINGLE_ARM_HAND),
                 context=self._context,
             )
 
@@ -143,8 +147,14 @@ class RobotSupervisor:
     # ── lifecycle ─────────────────────────────────────────
 
     def start(self) -> None:
-        for slot in self._slots.values():
-            self._start_slot(slot)
+        try:
+            for slot in self._slots.values():
+                self._start_slot(slot)
+        except BaseException:
+            # Starting a bimanual pair is transactional: never leave the first
+            # robot worker running when the second process fails to spawn.
+            self._shutdown_slots(list(self._slots.values()))
+            raise
 
     def _start_slot(self, slot: _ArmSlot) -> None:
         if slot.process is not None and slot.process.is_alive():
@@ -186,10 +196,11 @@ class RobotSupervisor:
     # ── pose / control ────────────────────────────────────
 
     def publish_pose(self, pose: PoseMessage) -> None:
-        hand = self._resolve_hand(pose.hand)
-        slot = self._slots.get(hand)
-        if slot is None or slot.ipc is None:
-            return
+        slot = self._slots.get(pose.hand)
+        if slot is None:
+            raise ValueError(f"no robot worker is configured for hand '{pose.hand}'")
+        if slot.ipc is None:
+            raise RuntimeError(f"robot worker ({pose.hand}) is not running")
         slot.ipc.mailbox.publish(pose, slot.generation)
         if slot.last_grip is None or pose.grip != slot.last_grip:
             self._send_control_slot(
@@ -238,7 +249,21 @@ class RobotSupervisor:
 
     # ── status / health ───────────────────────────────────
 
-    def drain_status(self, hand: str | None = None) -> dict[str, list[WorkerStatus]]:
+    def accepts_hand(self, hand: str) -> bool:
+        return hand in self._slots
+
+    def drain_status(self) -> list[WorkerStatus]:
+        """Return a flat status stream for backward-compatible callers."""
+        return [
+            status
+            for statuses in self.drain_status_by_hand().values()
+            for status in statuses
+        ]
+
+    def drain_status_by_hand(
+        self,
+        hand: str | None = None,
+    ) -> dict[str, list[WorkerStatus]]:
         result: dict[str, list[WorkerStatus]] = {}
         for slot in self._iter_slots(hand):
             statuses: list[WorkerStatus] = []
@@ -254,7 +279,30 @@ class RobotSupervisor:
             result[slot.hand] = statuses
         return result
 
-    def health(self, hand: str | None = None) -> dict[str, SupervisorHealth]:
+    def latest_status_by_hand(self) -> dict[str, WorkerStatus | None]:
+        return {hand: slot.latest_status for hand, slot in self._slots.items()}
+
+    def health(self) -> SupervisorHealth:
+        """Return aggregate health while preserving the single-worker API."""
+        health_map = self.health_by_hand()
+        if not health_map:
+            return SupervisorHealth(False, None, False, 0)
+        ages = [
+            health.heartbeat_age_ms
+            for health in health_map.values()
+            if health.heartbeat_age_ms is not None
+        ]
+        return SupervisorHealth(
+            alive=all(health.alive for health in health_map.values()),
+            heartbeat_age_ms=max(ages) if ages else None,
+            hung=any(health.hung for health in health_map.values()),
+            generation=max(health.generation for health in health_map.values()),
+        )
+
+    def health_by_hand(
+        self,
+        hand: str | None = None,
+    ) -> dict[str, SupervisorHealth]:
         result: dict[str, SupervisorHealth] = {}
         for slot in self._iter_slots(hand):
             result[slot.hand] = self._slot_health(slot)
@@ -285,33 +333,80 @@ class RobotSupervisor:
 
     # ── shutdown ──────────────────────────────────────────
 
-    def shutdown(self) -> dict[str, ShutdownReport]:
-        reports: dict[str, ShutdownReport] = {}
-        for slot in self._slots.values():
-            reports[slot.hand] = self._shutdown_slot(slot)
-        return reports
+    def shutdown(self) -> ShutdownReport:
+        """Stop every worker and return an aggregate legacy report."""
+        reports = self.shutdown_by_hand()
+        exit_codes = [report.exit_code for report in reports.values()]
+        nonzero = next((code for code in exit_codes if code not in {None, 0}), None)
+        return ShutdownReport(
+            graceful=all(report.graceful for report in reports.values()),
+            terminated=any(report.terminated for report in reports.values()),
+            killed=any(report.killed for report in reports.values()),
+            exit_code=nonzero if nonzero is not None else next(iter(exit_codes), None),
+        )
 
-    def _shutdown_slot(self, slot: _ArmSlot) -> ShutdownReport:
-        if slot.process is None:
-            return ShutdownReport(True, False, False, None)
-        process = slot.process
-        self._send_control_slot(slot, ControlCommand.SHUTDOWN)
-        process.join(timeout=self.config.graceful_shutdown_s)
-        graceful = not process.is_alive()
-        terminated = False
-        killed = False
-        if process.is_alive():
-            terminated = True
-            process.terminate()
-            process.join(timeout=1.0)
-        if process.is_alive():
-            killed = True
-            process.kill()
-            process.join(timeout=1.0)
-        exit_code = process.exitcode
-        self._close_slot_ipc(slot)
-        slot.process = None
-        return ShutdownReport(graceful, terminated, killed, exit_code)
+    def shutdown_by_hand(self) -> dict[str, ShutdownReport]:
+        return self._shutdown_slots(list(self._slots.values()))
+
+    def _shutdown_slots(
+        self,
+        slots: list[_ArmSlot],
+    ) -> dict[str, ShutdownReport]:
+        reports: dict[str, ShutdownReport] = {}
+        running = [
+            slot
+            for slot in slots
+            if slot.process is not None and slot.process.pid is not None
+        ]
+        for slot in slots:
+            if slot.process is None or slot.process.pid is None:
+                reports[slot.hand] = ShutdownReport(True, False, False, None)
+                self._close_slot_ipc(slot)
+                slot.process = None
+
+        # Broadcast first so both controllers receive their stop request before
+        # waiting for either SDK process to finish.
+        for slot in running:
+            self._send_control_slot(slot, ControlCommand.SHUTDOWN)
+
+        graceful_deadline = time.monotonic() + self.config.graceful_shutdown_s
+        for slot in running:
+            remaining = max(0.0, graceful_deadline - time.monotonic())
+            slot.process.join(timeout=remaining)
+        graceful = {slot.hand: not slot.process.is_alive() for slot in running}
+
+        terminated = {slot.hand: False for slot in running}
+        for slot in running:
+            if slot.process.is_alive():
+                terminated[slot.hand] = True
+                slot.process.terminate()
+        terminate_deadline = time.monotonic() + 1.0
+        for slot in running:
+            if slot.process.is_alive():
+                remaining = max(0.0, terminate_deadline - time.monotonic())
+                slot.process.join(timeout=remaining)
+
+        killed = {slot.hand: False for slot in running}
+        for slot in running:
+            if slot.process.is_alive():
+                killed[slot.hand] = True
+                slot.process.kill()
+        kill_deadline = time.monotonic() + 1.0
+        for slot in running:
+            if slot.process.is_alive():
+                remaining = max(0.0, kill_deadline - time.monotonic())
+                slot.process.join(timeout=remaining)
+
+        for slot in running:
+            reports[slot.hand] = ShutdownReport(
+                graceful=graceful[slot.hand],
+                terminated=terminated[slot.hand],
+                killed=killed[slot.hand],
+                exit_code=slot.process.exitcode,
+            )
+            self._close_slot_ipc(slot)
+            slot.process = None
+        return reports
 
     def _close_slot_ipc(self, slot: _ArmSlot) -> None:
         if slot.ipc is None:
@@ -330,14 +425,10 @@ class RobotSupervisor:
 
     # ── helpers ───────────────────────────────────────────
 
-    def _resolve_hand(self, hand: str) -> str:
-        """Map pose hand to a slot name. For single-robot mode any hand maps
-        to the single slot."""
-        if hand in self._slots:
-            return hand
-        if not self.is_bimanual:
-            return SINGLE_ARM_HAND
-        return hand
+    def _fake_behavior_for(self, hand: str) -> FakeRobotBehavior | None:
+        if isinstance(self.fake_behavior, Mapping):
+            return self.fake_behavior.get(hand)
+        return self.fake_behavior
 
     def _iter_slots(self, hand: str | None = None):
         if hand is not None:

@@ -20,14 +20,14 @@ Teleop Web Process (Python 3.10 + aiohttp)
     - 상태/오류를 UI에 전송
         │ bounded IPC
         ▼
-RobotWorker Process (Python 3.10)
-    - Fairino SDK의 유일한 application-level 소유자
+RobotWorker Process (Python 3.10, configured arm당 1개)
+    - 해당 Fairino SDK의 유일한 application-level 소유자
     - 8 ms best-effort servo loop
     - clutch/servo/fault 상태 머신
     - stale input 및 lifecycle 정지
         │ Fairino Python SDK
         ▼
-Fairino FR5 Controller
+Fairino FR5 Controller (단일 또는 승인된 left/right pair)
 ```
 
 완성된 시스템은 다음을 만족해야 한다.
@@ -332,6 +332,13 @@ telemetry sequence는 pose sequence와 독립적으로 증가한다.
 
 Fairino SDK import와 `Robot.RPC()` 생성은 child process 안에서만 수행한다. 부모 process와 테스트 discovery 단계에서는 vendor SDK에 연결하지 않는다.
 
+`robot.arms.left/right`가 구성되면 각 arm은 독립 worker, mailbox, control/status
+channel, heartbeat와 generation을 소유한다. 한쪽 worker의 hang/비정상 종료는
+양팔 control domain 전체를 fail-stop한다. 부모는 양쪽 pose를 무효화하고
+`SESSION_LOST`/`SHUTDOWN`을 양쪽에 먼저 전송한 다음 공통 deadline으로
+join/terminate/kill한다. 한쪽 stop 완료를 기다린 뒤 다른 쪽에 stop을 보내지
+않는다. 양팔 servo tick은 서로 hard real-time 동기화된 것으로 간주하지 않는다.
+
 IPC는 목적별로 분리한다.
 
 1. `LatestPoseMailbox`
@@ -525,7 +532,8 @@ claim하거나 control message를 보내지 않는다.
 다음 조건을 위반하는 변경은 merge 또는 실제 로봇 테스트 대상이 될 수 없다.
 
 - 부모 asyncio process에서는 Fairino SDK 메서드를 호출하지 않는다.
-- 하나의 worker process만 로봇 SDK lifecycle을 소유한다.
+- robot 하나당 정확히 하나의 worker process만 해당 SDK lifecycle을 소유한다.
+- 양팔 중 한 worker가 hang/종료하면 다른 arm과 controller lease도 fail-stop한다.
 - grip은 dead-man switch이며 stale pose는 grip=false와 동등하게 취급한다.
 - grip 해제는 servo를 정지하지만 WebXR session과 controller lease는 유지한다.
 - `ServoMoveStart` 성공 전에는 ACTIVE가 될 수 없다.
@@ -753,7 +761,7 @@ systemd: vr-teleop.service
 ```
 
 - 전용 비특권 service user를 사용한다.
-- 서비스 instance는 한 대의 robot당 하나만 허용한다.
+- 서비스 instance는 승인된 하나의 control domain(단일 robot 또는 양팔 pair)당 하나만 허용한다.
 - `Restart=on-failure`, `KillMode=control-group`, 명시적 `TimeoutStopSec`를 설정한다.
 - service stop이 먼저 애플리케이션의 graceful shutdown을 기다리게 한다.
 - 인증서와 key 권한을 최소화한다.

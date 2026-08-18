@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import replace
 from pathlib import Path
 
-from teleop.config import GripperConfig, TeleopConfig
+from teleop.app import TeleopRuntime
+from teleop.config import ArmConfig, GripperConfig, TeleopConfig
 from teleop.protocol import PoseMessage
 from teleop.robot.fake_client import FakeRobotBehavior
 from teleop.robot.state import ControlCommand, WorkerState
@@ -30,12 +32,13 @@ def pose(
     x: float = 0.0,
     *,
     trigger: bool = False,
+    hand: str = "right",
 ) -> PoseMessage:
     return PoseMessage(
         session_id="test",
         seq=seq,
         client_time_ms=float(seq),
-        hand="right",
+        hand=hand,
         position_m=(x, 1.0, 0.0),
         orientation_xyzw=(0.0, 0.0, 0.0, 1.0),
         grip=grip,
@@ -68,6 +71,107 @@ def wait_for_status(supervisor: RobotSupervisor, predicate, timeout: float = 3.0
     raise AssertionError(
         f"worker did not reach expected status; latest={supervisor.latest_status}"
     )
+
+
+def wait_for_hand_state(
+    supervisor: RobotSupervisor,
+    hand: str,
+    state: WorkerState,
+    timeout: float = 3.0,
+):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        supervisor.drain_status_by_hand()
+        status = supervisor.latest_status_by_hand().get(hand)
+        if status is not None and status.state == state:
+            return status
+        time.sleep(0.01)
+    raise AssertionError(
+        f"worker {hand} did not reach {state}; "
+        f"latest={supervisor.latest_status_by_hand()}"
+    )
+
+
+def test_bimanual_workers_route_pose_and_shutdown_independently() -> None:
+    config = replace(
+        make_config(),
+        pose_timeout_s=0.500,
+        worker_watchdog_s=1.000,
+        arms=(ArmConfig(hand="left"), ArmConfig(hand="right")),
+    )
+    supervisor = RobotSupervisor(config)
+    supervisor.start()
+    reports = None
+    try:
+        wait_for_hand_state(supervisor, "left", WorkerState.IDLE)
+        wait_for_hand_state(supervisor, "right", WorkerState.IDLE)
+        assert set(supervisor.health_by_hand()) == {"left", "right"}
+        assert all(health.alive for health in supervisor.health_by_hand().values())
+
+        supervisor.publish_pose(pose(0, False, hand="left"))
+        supervisor.publish_pose(pose(1, True, 0.01, hand="left"))
+        left = wait_for_hand_state(supervisor, "left", WorkerState.ACTIVE)
+        assert left.counters.servo_start_count == 1
+        assert supervisor.latest_status_by_hand()["right"].state == WorkerState.IDLE
+
+        supervisor.publish_pose(pose(0, False, hand="right"))
+        supervisor.publish_pose(pose(1, True, 0.01, hand="right"))
+        right = wait_for_hand_state(supervisor, "right", WorkerState.ACTIVE)
+        assert right.counters.servo_start_count == 1
+    finally:
+        reports = supervisor.shutdown_by_hand()
+
+    assert set(reports) == {"left", "right"}
+    assert all(not report.killed for report in reports.values())
+
+
+async def test_bimanual_worker_fault_stops_active_peer() -> None:
+    config = replace(
+        make_config(),
+        pose_timeout_s=0.500,
+        worker_watchdog_s=1.000,
+        arms=(ArmConfig(hand="left"), ArmConfig(hand="right")),
+    )
+    runtime = TeleopRuntime(config)
+    runtime.supervisor = RobotSupervisor(
+        config,
+        fake_behavior={
+            "left": FakeRobotBehavior(fail_on="servo_start"),
+            "right": FakeRobotBehavior(),
+        },
+    )
+    await runtime.start()
+
+    async def wait_hand(hand: str, state: WorkerState):
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            status = runtime.supervisor.latest_status_by_hand().get(hand)
+            if status is not None and status.state == state:
+                return status
+            await asyncio.sleep(0.01)
+        raise AssertionError(
+            f"worker {hand} did not reach {state}; "
+            f"latest={runtime.supervisor.latest_status_by_hand()}"
+        )
+
+    try:
+        await wait_hand("left", WorkerState.IDLE)
+        await wait_hand("right", WorkerState.IDLE)
+
+        runtime.supervisor.publish_pose(pose(0, False, hand="right"))
+        runtime.supervisor.publish_pose(pose(1, True, hand="right"))
+        await wait_hand("right", WorkerState.ACTIVE)
+
+        runtime.supervisor.publish_pose(pose(0, False, hand="left"))
+        runtime.supervisor.publish_pose(pose(1, True, hand="left"))
+        left_fault = await wait_hand("left", WorkerState.FAULT)
+        right_stopped = await wait_hand("right", WorkerState.IDLE)
+
+        assert left_fault.reason == "arming_failed"
+        assert right_stopped.reason == "session_release"
+        assert right_stopped.counters.servo_end_count == 1
+    finally:
+        await runtime.stop()
 
 
 def test_grip_release_sleeps_and_rising_edge_resumes_servo() -> None:

@@ -7,6 +7,10 @@ release candidate로 표시한다.
 
 ### Added
 
+- left/right FR5마다 독립 worker process, latest-pose mailbox, control/status
+  IPC와 heartbeat를 사용하는 optional bimanual pipeline
+- 손별 pose sequence/ACK/status 및 두 fake worker를 검증하는 config,
+  process, WebSocket integration test
 - Quest XR frame/controller pose gap, tracking loss, WebSocket RTT,
   buffered bytes와 pose send/drop을 보고하는 1초 client telemetry
 - control lease를 claim하지 않는 `/monitor` 작업자 화면
@@ -46,6 +50,19 @@ release candidate로 표시한다.
 
 ### Fixed
 
+- 양팔 변경에서 기본 config가 hardware/high-speed/gripper-enabled로 바뀌고
+  단일 팔 좌표계와 공개 supervisor API가 깨진 안전·호환성 회귀
+- grip rising edge가 controller fault를 자동 reset하고 trigger/gripper 완료
+  polling 및 재무장 상태 머신을 우회하던 회귀
+- 한쪽 worker watchdog 시 다른 팔과 controller lease가 남을 수 있던
+  partial-stop 경로를 양팔 fail-stop containment로 변경
+- 두 worker를 순차 shutdown하여 두 번째 팔의 stop 요청이 늦어질 수 있던
+  종료 경로를 broadcast-first, shared-deadline 방식으로 변경
+- hand별 sequence를 단일 진단 stream으로 집계해 false gap을 기록하고
+  top-level ACK가 갱신되지 않던 문제
+- 단일 로봇 모드에서도 WebXR가 양손 pose를 모두 한 worker에 보내 두
+  controller 기준점이 교대로 적용될 수 있던 문제
+- 양팔 IP를 중복 지정해 두 worker가 같은 controller를 소유할 수 있던 설정
 - Ctrl+C가 parent와 RobotWorker를 동시에 interrupt해 child가
   `KeyboardInterrupt` FAULT로 종료되던 signal ownership 문제
 - application shutdown에서 동일한 `SHUTDOWN` command를 두 번 보내던

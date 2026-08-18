@@ -28,7 +28,7 @@ def _norm(vector: Vector3) -> float:
 
 def vr_to_robot_delta(vr_delta_m: Vector3, scale_mm_per_m: float) -> Vector3:
     dx, dy, dz = vr_delta_m
-    return (dx * scale_mm_per_m, -dz * scale_mm_per_m, dy * scale_mm_per_m)
+    return (-dz * scale_mm_per_m, -dx * scale_mm_per_m, dy * scale_mm_per_m)
 
 
 def clamp_step(delta: Vector3, max_step_mm: float) -> Vector3:
