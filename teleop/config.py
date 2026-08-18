@@ -74,6 +74,7 @@ class ArmConfig:
     """Per-arm configuration for bimanual teleoperation."""
     hand: str
     robot_ip: str | None = None
+    sdk_path: Path | None = None
     gripper: GripperConfig = field(default_factory=GripperConfig)
     workspace: WorkspaceBounds = field(default_factory=WorkspaceBounds)
     exaxis_default: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
@@ -83,6 +84,8 @@ class ArmConfig:
             raise ValueError(f"arm hand must be 'left' or 'right', got '{self.hand}'")
         if not dry_run and not self.robot_ip:
             raise ValueError(f"arms.{self.hand}.ip is required outside dry-run")
+        if self.sdk_path is not None and not self.sdk_path.exists():
+            raise ValueError(f"arms.{self.hand}.sdk_path does not exist: {self.sdk_path}")
         self.workspace.validate()
         self.gripper.validate()
 
@@ -523,6 +526,7 @@ class TeleopConfig:
                     robot.get("exaxis_default", defaults.exaxis_default),
                     "robot.exaxis_default",
                 ),
+                config_dir=base_dir,
             ),
         )
         if validate:
@@ -623,6 +627,7 @@ def _parse_arms(
     gripper_defaults: GripperConfig,
     workspace_defaults: WorkspaceBounds,
     exaxis_defaults: tuple[float, float, float, float],
+    config_dir: Path,
 ) -> tuple[ArmConfig, ...]:
     if not raw_arms:
         return ()
@@ -638,11 +643,17 @@ def _parse_arms(
         arm_section = _mapping(arms_map[hand], f"robot.arms.{hand}")
         _reject_unknown(
             arm_section,
-            {"ip", "gripper", "workspace", "exaxis_default"},
+            {"ip", "sdk_path", "gripper", "workspace", "exaxis_default"},
             f"robot.arms.{hand}",
         )
         arm_ip_raw = arm_section.get("ip")
         arm_ip = _string(arm_ip_raw, f"robot.arms.{hand}.ip") if arm_ip_raw is not None else None
+        arm_sdk_raw = arm_section.get("sdk_path")
+        arm_sdk = (
+            _path(arm_sdk_raw, f"robot.arms.{hand}.sdk_path", config_dir)
+            if arm_sdk_raw is not None
+            else None
+        )
         arm_gripper_section = _section(arm_section, "gripper")
         if arm_gripper_section:
             _reject_unknown(
@@ -682,6 +693,7 @@ def _parse_arms(
         result.append(ArmConfig(
             hand=hand,
             robot_ip=arm_ip,
+            sdk_path=arm_sdk,
             gripper=arm_gripper,
             workspace=arm_workspace,
             exaxis_default=arm_exaxis,

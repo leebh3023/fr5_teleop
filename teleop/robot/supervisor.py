@@ -90,6 +90,7 @@ class RobotSupervisor:
                     gripper=arm_cfg.gripper,
                     workspace=arm_cfg.workspace,
                     exaxis_default=arm_cfg.exaxis_default,
+                    sdk_path=arm_cfg.sdk_path if arm_cfg.sdk_path is not None else config.sdk_path,
                 )
                 self._slots[arm_cfg.hand] = _ArmSlot(
                     hand=arm_cfg.hand,

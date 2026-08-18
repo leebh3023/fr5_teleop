@@ -142,10 +142,12 @@ def test_cli_hardware_mode_requires_explicit_confirmation(tmp_path: Path) -> Non
 
 def test_gripper_timeout_must_cover_controller_command() -> None:
     config = TeleopConfig(
+        tls_cert_path=None,
+        tls_key_path=None,
         gripper=GripperConfig(
             command_max_time_ms=3000,
             action_timeout_s=2.0,
-        )
+        ),
     )
 
     with pytest.raises(ValueError, match="must cover command_max_time_ms"):
@@ -157,6 +159,9 @@ def test_bimanual_yaml_loads_per_arm_overrides(tmp_path: Path) -> None:
     web_dir.mkdir()
     (web_dir / "index.html").write_text("", encoding="utf-8")
     (web_dir / "monitor.html").write_text("", encoding="utf-8")
+    (tmp_path / "sdk/linux").mkdir(parents=True)
+    (tmp_path / "sdk/left/linux").mkdir(parents=True)
+    (tmp_path / "sdk/right/linux").mkdir(parents=True)
     path = tmp_path / "bimanual.yaml"
     path.write_text(
         """
@@ -171,10 +176,12 @@ robot:
   arms:
     left:
       ip: 192.168.58.2
+      sdk_path: sdk/left/linux
       workspace:
         x: [-300, 0]
     right:
       ip: 192.168.58.3
+      sdk_path: sdk/right/linux
       gripper:
         enabled: true
 motion:
@@ -192,19 +199,27 @@ gripper:
 
     assert tuple(arm.hand for arm in config.arms) == ("left", "right")
     assert config.arms[0].workspace.x == (-300.0, 0.0)
+    assert config.arms[0].sdk_path == (tmp_path / "sdk/left/linux").resolve()
     assert config.arms[0].gripper.enabled is False
     assert config.arms[1].workspace.x == (-600.0, 600.0)
+    assert config.arms[1].sdk_path == (tmp_path / "sdk/right/linux").resolve()
     assert config.arms[1].gripper.enabled is True
 
 
 def test_bimanual_config_requires_exactly_left_and_right() -> None:
     with pytest.raises(ValueError, match="exactly one left and one right"):
-        TeleopConfig(arms=(ArmConfig(hand="left"),)).validate()
+        TeleopConfig(
+            tls_cert_path=None,
+            tls_key_path=None,
+            arms=(ArmConfig(hand="left"),),
+        ).validate()
 
 
 def test_bimanual_config_rejects_ambiguous_single_robot_ip() -> None:
     with pytest.raises(ValueError, match="cannot be combined"):
         TeleopConfig(
+            tls_cert_path=None,
+            tls_key_path=None,
             robot_ip="192.168.58.10",
             arms=(ArmConfig(hand="left"), ArmConfig(hand="right")),
         ).validate()
@@ -213,6 +228,8 @@ def test_bimanual_config_rejects_ambiguous_single_robot_ip() -> None:
 def test_bimanual_config_rejects_duplicate_robot_ips() -> None:
     with pytest.raises(ValueError, match="different IP"):
         TeleopConfig(
+            tls_cert_path=None,
+            tls_key_path=None,
             arms=(
                 ArmConfig(hand="left", robot_ip="192.168.58.2"),
                 ArmConfig(hand="right", robot_ip="192.168.58.2"),
