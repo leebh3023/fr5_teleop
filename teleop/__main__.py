@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--confirm-hardware",
         action="store_true",
-        help="required together with --robot to permit real hardware mode",
+        help="required to permit any real hardware mode",
     )
     parser.add_argument(
         "--sdk-path",
@@ -60,6 +60,9 @@ def resolve_config(
         config = TeleopConfig.from_yaml(args.config, validate=False)
     except ValueError as exc:
         parser.error(str(exc))
+
+    if args.robot_ip and config.arms:
+        parser.error("--robot cannot override a bimanual robot.arms configuration")
 
     overrides = {
         "host": args.host,

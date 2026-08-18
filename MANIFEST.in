@@ -2,6 +2,7 @@ include AGENTS.md
 include CHANGELOG.md
 include RELEASE_CHECKLIST.md
 include config.yaml
+include config_bimanual.yaml
 include requirements.txt
 include requirements-lock.txt
 include requirements-dev.txt

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from teleop.config import GripperConfig, TeleopConfig
+from teleop.config import ArmConfig, GripperConfig, TeleopConfig
 from teleop.__main__ import build_parser, resolve_config
 
 
@@ -150,3 +150,82 @@ def test_gripper_timeout_must_cover_controller_command() -> None:
 
     with pytest.raises(ValueError, match="must cover command_max_time_ms"):
         config.validate()
+
+
+def test_bimanual_yaml_loads_per_arm_overrides(tmp_path: Path) -> None:
+    web_dir = tmp_path / "web"
+    web_dir.mkdir()
+    (web_dir / "index.html").write_text("", encoding="utf-8")
+    (web_dir / "monitor.html").write_text("", encoding="utf-8")
+    path = tmp_path / "bimanual.yaml"
+    path.write_text(
+        """
+runtime:
+  dry_run: true
+server:
+  web_dir: web
+tls:
+  enabled: false
+robot:
+  sdk_path: sdk/linux
+  arms:
+    left:
+      ip: 192.168.58.2
+      workspace:
+        x: [-300, 0]
+    right:
+      ip: 192.168.58.3
+      gripper:
+        enabled: true
+motion:
+  workspace:
+    x: [-600, 600]
+    y: [-600, 600]
+    z: [50, 700]
+gripper:
+  enabled: false
+""",
+        encoding="utf-8",
+    )
+
+    config = TeleopConfig.from_yaml(path)
+
+    assert tuple(arm.hand for arm in config.arms) == ("left", "right")
+    assert config.arms[0].workspace.x == (-300.0, 0.0)
+    assert config.arms[0].gripper.enabled is False
+    assert config.arms[1].workspace.x == (-600.0, 600.0)
+    assert config.arms[1].gripper.enabled is True
+
+
+def test_bimanual_config_requires_exactly_left_and_right() -> None:
+    with pytest.raises(ValueError, match="exactly one left and one right"):
+        TeleopConfig(arms=(ArmConfig(hand="left"),)).validate()
+
+
+def test_bimanual_config_rejects_ambiguous_single_robot_ip() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        TeleopConfig(
+            robot_ip="192.168.58.10",
+            arms=(ArmConfig(hand="left"), ArmConfig(hand="right")),
+        ).validate()
+
+
+def test_bimanual_config_rejects_duplicate_robot_ips() -> None:
+    with pytest.raises(ValueError, match="different IP"):
+        TeleopConfig(
+            arms=(
+                ArmConfig(hand="left", robot_ip="192.168.58.2"),
+                ArmConfig(hand="right", robot_ip="192.168.58.2"),
+            ),
+        ).validate()
+
+
+def test_repository_configs_keep_safe_defaults() -> None:
+    root = Path(__file__).resolve().parents[2]
+    for name in ("config.yaml", "config_bimanual.yaml"):
+        config = TeleopConfig.from_yaml(root / name, validate=False)
+        assert config.dry_run is True
+        assert config.gripper.enabled is False
+        assert config.gripper.activate_on_start is False
+        assert config.max_velocity_mm_s == 50.0
+        assert config.max_step_mm == 0.75

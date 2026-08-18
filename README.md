@@ -20,10 +20,10 @@ Ubuntu 22.04 / Python 3.10 x86-64 오프라인 설치에 사용한다.
 Quest WebXR (JavaScript)
     -> HTTPS WebSocket
 Python aiohttp process
-    -> latest-pose shared mailbox + control IPC
-Python RobotWorker process
-    -> Fairino Python SDK
-FR5 controller
+    -> hand별 latest-pose mailbox + control IPC
+Python RobotWorker process (robot당 1개)
+    -> hand별 Fairino Python SDK
+FR5 controller 1대 또는 좌/우 2대
 ```
 
 Fairino SDK는 동기 호출과 내부 network thread를 사용하므로 별도 process에 격리한다. 기본 실행은 실제 robot에 연결하지 않는 fake dry-run이다.
@@ -109,6 +109,45 @@ override한다.
 ```bash
 python -m teleop --config /etc/vr-teleop/config.yaml
 ```
+
+### Bimanual configuration
+
+`config_bimanual.yaml`은 좌·우 FR5를 각각 독립 `RobotWorker` process와
+IPC generation으로 격리하는 안전한 dry-run 예제다. `robot.ip`와
+`robot.arms`는 함께 사용할 수 없으며 양팔 모드는 `left`, `right`를
+각각 정확히 한 번 설정해야 한다.
+
+```yaml
+runtime:
+  dry_run: true
+robot:
+  sdk_path: fairino-python-sdk-main/linux
+  arms:
+    left:
+      ip: 192.168.58.2
+    right:
+      ip: 192.168.58.3
+```
+
+```bash
+python -m teleop --config config_bimanual.yaml --no-tls
+```
+
+WebXR pose sequence, mailbox, grip/trigger control event, heartbeat와 status는
+hand별로 분리된다. 한쪽 worker가 hang 또는 비정상 종료하면 양팔을 하나의
+안전 domain으로 보고 두 pose를 모두 무효화하고 두 worker에 stop을 보낸 뒤
+controller lease를 해제한다. 종료도 두 worker에 먼저 `SHUTDOWN`을 broadcast한
+후 하나의 공통 deadline으로 join/terminate/kill한다. 이 구조는 두 controller의
+servo clock을 hard real-time으로 동기화하지는 않는다.
+
+서버는 WebSocket `hello.control_hands`로 허용 hand를 알린다. 단일 로봇
+모드에서는 WebXR가 오른손(없으면 하나의 fallback controller)만 선택해
+`right` stream으로 정규화한다. 좌·우 pose를 하나의 worker mailbox에
+번갈아 넣지 않으며, 허용되지 않은 hand 메시지는 protocol error로 거부한다.
+
+실제 양팔 모드는 예제의 `runtime.dry_run`을 `false`로 바꾸고 두 IP, SDK,
+workspace를 장비별로 승인한 뒤 `--confirm-hardware`를 사용한다. 단일 로봇용
+`--robot` CLI override는 양팔 설정과 함께 사용할 수 없다.
 
 Health endpoints:
 

@@ -6,7 +6,7 @@ from pathlib import Path
 from aiohttp.test_utils import TestClient, TestServer
 
 from teleop.app import create_app
-from teleop.config import TeleopConfig
+from teleop.config import ArmConfig, TeleopConfig
 
 
 async def receive_type(ws, message_type: str, timeout: float = 3.0) -> dict:
@@ -57,6 +57,7 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
             ws = await client.ws_connect("/ws")
             hello = await receive_type(ws, "hello")
             session_id = hello["session_id"]
+            assert hello["control_hands"] == ["right"]
             await ws.send_json(
                 {
                     "version": 1,
@@ -71,6 +72,23 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
             assert idle["gripper_enabled"] is False
             assert idle["gripper_busy"] is False
             assert idle["gripper_position"] == 0
+
+            await ws.send_json(
+                {
+                    "version": 1,
+                    "type": "pose",
+                    "session_id": session_id,
+                    "seq": 0,
+                    "client_time_ms": 0.0,
+                    "hand": "left",
+                    "position_m": [0.0, 1.0, 0.0],
+                    "orientation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                    "grip": False,
+                    "trigger": False,
+                }
+            )
+            wrong_hand = await receive_type(ws, "error")
+            assert "no robot is configured" in wrong_hand["message"]
 
             await ws.send_json(
                 {
@@ -146,4 +164,85 @@ async def test_websocket_claim_pose_and_release_flow() -> None:
             )
             idle = await receive_state(ws, "IDLE")
             assert idle["tracking"] is False
+            await ws.close()
+
+
+async def test_bimanual_websocket_routes_both_hands_and_reports_ack() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = TeleopConfig(
+        web_dir=root / "web",
+        tls_cert_path=None,
+        tls_key_path=None,
+        status_hz=30.0,
+        pose_timeout_s=0.500,
+        worker_watchdog_s=1.000,
+        arms=(ArmConfig(hand="left"), ArmConfig(hand="right")),
+    )
+    async with TestServer(create_app(config)) as server:
+        async with TestClient(server) as client:
+            ws = await client.ws_connect("/ws")
+            hello = await receive_type(ws, "hello")
+            session_id = hello["session_id"]
+            assert hello["control_hands"] == ["left", "right"]
+            await ws.send_json(
+                {
+                    "version": 1,
+                    "type": "event",
+                    "session_id": session_id,
+                    "event": "claim_control",
+                }
+            )
+            assert (await receive_type(ws, "control"))["granted"] is True
+            await receive_status(
+                ws,
+                lambda status: all(
+                    status.get("arms", {}).get(hand, {}).get("state") == "IDLE"
+                    for hand in ("left", "right")
+                ),
+            )
+
+            def hand_pose(hand: str, seq: int, grip: bool) -> dict:
+                return {
+                    "version": 1,
+                    "type": "pose",
+                    "session_id": session_id,
+                    "seq": seq,
+                    "client_time_ms": float(seq),
+                    "hand": hand,
+                    "position_m": [0.01 * seq, 1.0, 0.0],
+                    "orientation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                    "grip": grip,
+                    "trigger": False,
+                }
+
+            for hand in ("left", "right"):
+                await ws.send_json(hand_pose(hand, 0, False))
+                await ws.send_json(hand_pose(hand, 1, True))
+
+            active = await receive_status(
+                ws,
+                lambda status: all(
+                    status.get("arms", {}).get(hand, {}).get("state") == "ACTIVE"
+                    for hand in ("left", "right")
+                ),
+            )
+            assert active["ack_seq"] == 1
+            assert active["ack_seq_by_hand"] == {"left": 1, "right": 1}
+
+            await ws.send_json(
+                {
+                    "version": 1,
+                    "type": "pose",
+                    "session_id": session_id,
+                    "seq": 0,
+                    "client_time_ms": 0.0,
+                    "hand": "none",
+                    "position_m": [0.0, 1.0, 0.0],
+                    "orientation_xyzw": [0.0, 0.0, 0.0, 1.0],
+                    "grip": False,
+                    "trigger": False,
+                }
+            )
+            error = await receive_type(ws, "error")
+            assert "no robot is configured" in error["message"]
             await ws.close()

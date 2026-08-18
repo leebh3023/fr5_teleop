@@ -167,7 +167,7 @@ let ws = null;
 let wsConnected = false;
 let sessionId = null;
 let controllerOwned = false;
-let poseSeq = 0;
+let controlHands = ['right'];
 let poseDropCount = 0;
 let poseSendCount = 0;
 let telemetrySeq = 0;
@@ -215,7 +215,12 @@ function connectWS() {
       const data = JSON.parse(e.data);
       if (data.type === 'hello') {
         sessionId = data.session_id;
-        poseSeq = 0;
+        controlHands = (
+          Array.isArray(data.control_hands) && data.control_hands.length > 0
+            ? data.control_hands
+            : ['right']
+        );
+        resetHandPoseSequences();
         resetClientStats();
         controllerOwned = false;
         document.getElementById('ws-status').textContent = '연결됨';
@@ -269,6 +274,10 @@ function sendEvent(event) {
 
 // hand별 독립 시퀀스 카운터 (bimanual 모드)
 const handPoseSeq = { left: 0, right: 0 };
+
+function resetHandPoseSequences() {
+  for (const hand of Object.keys(handPoseSeq)) handPoseSeq[hand] = 0;
+}
 
 function sendPose(hand, pos, ori, grip, trigger) {
   if (!ws || ws.readyState !== WebSocket.OPEN || !sessionId || !controllerOwned) return;
@@ -513,9 +522,25 @@ function onXRFrame(time, frame) {
   }
 
   const sources = Array.from(xrSession.inputSources);
+  let controlSources;
+  if (controlHands.length > 1) {
+    controlSources = sources.filter(source => (
+      source.gripSpace && controlHands.includes(source.handedness)
+    ));
+  } else {
+    // 단일 로봇은 두 controller pose를 같은 worker에 섞지 않는다.
+    const preferred = (
+      sources.find(source => (
+        source.gripSpace && source.handedness === controlHands[0]
+      ))
+      || sources.find(source => source.gripSpace)
+    );
+    controlSources = preferred ? [preferred] : [];
+  }
   // 양손 컨트롤러 동시 전송 (bimanual 모드)
   let anyPoseFound = false;
-  for (const source of sources) {
+  let displayPose = null;
+  for (const source of controlSources) {
     if (!source.gripSpace) continue;
     const pose = frame.getPose(source.gripSpace, refSpace);
     if (!pose) continue;
@@ -531,24 +556,20 @@ function onXRFrame(time, frame) {
 
     const pos = pose.transform.position;
     const ori = pose.transform.orientation;
-    const hand = source.handedness || 'right';
+    const inputHand = source.handedness || controlHands[0];
+    const hand = controlHands.length > 1 ? inputHand : controlHands[0];
 
     // 버튼: 0=trigger, 1=grip
     let grip = false;
     let trigger = false;
     if (source.gamepad) {
-      trigger = readTriggerButton(source.gamepad.buttons[0], hand);
-      grip = readGripButton(source.gamepad.buttons[1], hand);
+      trigger = readTriggerButton(source.gamepad.buttons[0], inputHand);
+      grip = readGripButton(source.gamepad.buttons[1], inputHand);
     }
 
-    // 마지막으로 읽은 컨트롤러 정보를 UI에 표시 (right 우선)
-    if (hand === 'right' || !anyPoseFound) {
-      document.getElementById('vr-pos').textContent =
-        `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
-      document.getElementById('grip-status').textContent =
-        grip ? '🟢 누름' : '⚪ 해제';
-      document.getElementById('trigger-status').textContent =
-        trigger ? '🟠 누름' : '⚪ 해제';
+    // 오른손을 우선 표시하되 왼손만 추적될 때도 상태를 갱신한다.
+    if (displayPose === null || hand === 'right') {
+      displayPose = { pos, grip, trigger };
     }
 
     sendPose(hand, pos, ori, grip, trigger);
@@ -558,6 +579,13 @@ function onXRFrame(time, frame) {
     document.getElementById('track-status').textContent =
       '🟡 controller pose 추적 손실';
   } else {
+    const { pos, grip, trigger } = displayPose;
+    document.getElementById('vr-pos').textContent =
+      `${pos.x.toFixed(3)}, ${pos.y.toFixed(3)}, ${pos.z.toFixed(3)}`;
+    document.getElementById('grip-status').textContent =
+      grip ? '🟢 누름' : '⚪ 해제';
+    document.getElementById('trigger-status').textContent =
+      trigger ? '🟠 누름' : '⚪ 해제';
     document.getElementById('track-status').textContent =
       '🟢 트래킹 활성';
   }
