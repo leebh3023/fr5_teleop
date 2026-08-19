@@ -70,12 +70,34 @@ class GripperConfig:
 
 
 @dataclass(frozen=True)
+class ArmConfig:
+    """Per-arm configuration for bimanual teleoperation."""
+    hand: str
+    robot_ip: str | None = None
+    sdk_path: Path | None = None
+    gripper: GripperConfig = field(default_factory=GripperConfig)
+    workspace: WorkspaceBounds = field(default_factory=WorkspaceBounds)
+    exaxis_default: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+
+    def validate(self, *, dry_run: bool) -> None:
+        if self.hand not in {"left", "right"}:
+            raise ValueError(f"arm hand must be 'left' or 'right', got '{self.hand}'")
+        if not dry_run and not self.robot_ip:
+            raise ValueError(f"arms.{self.hand}.ip is required outside dry-run")
+        if self.sdk_path is not None and not self.sdk_path.exists():
+            raise ValueError(f"arms.{self.hand}.sdk_path does not exist: {self.sdk_path}")
+        self.workspace.validate()
+        self.gripper.validate()
+
+
+@dataclass(frozen=True)
 class TeleopConfig:
     log_level: str = "INFO"
     host: str = "0.0.0.0"
     port: int = 8443
     dry_run: bool = True
     robot_ip: str | None = None
+    arms: tuple[ArmConfig, ...] = ()
     sdk_path: Path = field(
         default_factory=lambda: PROJECT_ROOT / "fairino-python-sdk-main" / "linux"
     )
@@ -111,8 +133,21 @@ class TeleopConfig:
             raise ValueError("host must not be empty")
         if not (1 <= self.port <= 65535):
             raise ValueError("port must be in [1, 65535]")
-        if not self.dry_run and not self.robot_ip:
-            raise ValueError("robot_ip is required outside dry-run")
+        if self.arms:
+            hands = tuple(arm.hand for arm in self.arms)
+            if self.robot_ip is not None:
+                raise ValueError("robot.ip cannot be combined with robot.arms")
+            if len(hands) != 2 or set(hands) != {"left", "right"}:
+                raise ValueError(
+                    "robot.arms must configure exactly one left and one right arm"
+                )
+            robot_ips = [arm.robot_ip for arm in self.arms if arm.robot_ip]
+            if len(robot_ips) != len(set(robot_ips)):
+                raise ValueError("robot.arms must use a different IP for each arm")
+        if not self.dry_run and not self.robot_ip and not self.arms:
+            raise ValueError("robot_ip or arms configuration is required outside dry-run")
+        for arm in self.arms:
+            arm.validate(dry_run=self.dry_run)
         if not isfinite(self.servo_period_s) or self.servo_period_s <= 0:
             raise ValueError("servo_period_s must be positive")
         if (
@@ -211,7 +246,7 @@ class TeleopConfig:
             "server",
         )
         _reject_unknown(tls, {"enabled", "cert_path", "key_path"}, "tls")
-        _reject_unknown(robot, {"ip", "sdk_path", "exaxis_default"}, "robot")
+        _reject_unknown(robot, {"ip", "sdk_path", "exaxis_default", "arms"}, "robot")
         _reject_unknown(
             timing,
             {
@@ -434,6 +469,65 @@ class TeleopConfig:
                 server.get("allowed_origins", defaults.allowed_origins),
                 "server.allowed_origins",
             ),
+            arms=_parse_arms(
+                robot.get("arms", {}),
+                gripper_defaults=GripperConfig(
+                    enabled=_boolean(
+                        gripper.get("enabled", defaults.gripper.enabled),
+                        "gripper.enabled",
+                    ),
+                    index=_integer(
+                        gripper.get("index", defaults.gripper.index),
+                        "gripper.index",
+                    ),
+                    activate_on_start=_boolean(
+                        gripper.get("activate_on_start", defaults.gripper.activate_on_start),
+                        "gripper.activate_on_start",
+                    ),
+                    initially_closed=_boolean(
+                        gripper.get("initially_closed", defaults.gripper.initially_closed),
+                        "gripper.initially_closed",
+                    ),
+                    open_position=_integer(
+                        gripper.get("open_position", defaults.gripper.open_position),
+                        "gripper.open_position",
+                    ),
+                    closed_position=_integer(
+                        gripper.get("closed_position", defaults.gripper.closed_position),
+                        "gripper.closed_position",
+                    ),
+                    velocity=_integer(
+                        gripper.get("velocity", defaults.gripper.velocity),
+                        "gripper.velocity",
+                    ),
+                    force=_integer(
+                        gripper.get("force", defaults.gripper.force),
+                        "gripper.force",
+                    ),
+                    command_max_time_ms=_integer(
+                        gripper.get("command_max_time_ms", defaults.gripper.command_max_time_ms),
+                        "gripper.command_max_time_ms",
+                    ),
+                    action_timeout_s=_number(
+                        gripper.get("action_timeout_s", defaults.gripper.action_timeout_s),
+                        "gripper.action_timeout_s",
+                    ),
+                    poll_period_s=_number(
+                        gripper.get("poll_period_s", defaults.gripper.poll_period_s),
+                        "gripper.poll_period_s",
+                    ),
+                ),
+                workspace_defaults=WorkspaceBounds(
+                    x=_bounds(workspace.get("x", defaults.workspace.x), "motion.workspace.x"),
+                    y=_bounds(workspace.get("y", defaults.workspace.y), "motion.workspace.y"),
+                    z=_bounds(workspace.get("z", defaults.workspace.z), "motion.workspace.z"),
+                ),
+                exaxis_defaults=_four_numbers(
+                    robot.get("exaxis_default", defaults.exaxis_default),
+                    "robot.exaxis_default",
+                ),
+                config_dir=base_dir,
+            ),
         )
         if validate:
             config.validate()
@@ -525,3 +619,83 @@ def _four_numbers(
 
 def _strings(value: Any, name: str) -> tuple[str, ...]:
     return tuple(_string(item, name) for item in _sequence(value, name))
+
+
+def _parse_arms(
+    raw_arms: Any,
+    *,
+    gripper_defaults: GripperConfig,
+    workspace_defaults: WorkspaceBounds,
+    exaxis_defaults: tuple[float, float, float, float],
+    config_dir: Path,
+) -> tuple[ArmConfig, ...]:
+    if not raw_arms:
+        return ()
+    arms_map = _mapping(raw_arms, "robot.arms")
+    allowed_hands = {"left", "right"}
+    unknown = sorted(set(arms_map) - allowed_hands)
+    if unknown:
+        raise ValueError(f"unknown arm(s): {', '.join(unknown)}; must be 'left' or 'right'")
+    result: list[ArmConfig] = []
+    for hand in ("left", "right"):
+        if hand not in arms_map:
+            continue
+        arm_section = _mapping(arms_map[hand], f"robot.arms.{hand}")
+        _reject_unknown(
+            arm_section,
+            {"ip", "sdk_path", "gripper", "workspace", "exaxis_default"},
+            f"robot.arms.{hand}",
+        )
+        arm_ip_raw = arm_section.get("ip")
+        arm_ip = _string(arm_ip_raw, f"robot.arms.{hand}.ip") if arm_ip_raw is not None else None
+        arm_sdk_raw = arm_section.get("sdk_path")
+        arm_sdk = (
+            _path(arm_sdk_raw, f"robot.arms.{hand}.sdk_path", config_dir)
+            if arm_sdk_raw is not None
+            else None
+        )
+        arm_gripper_section = _section(arm_section, "gripper")
+        if arm_gripper_section:
+            _reject_unknown(
+                arm_gripper_section,
+                {
+                    "enabled", "index", "activate_on_start", "initially_closed",
+                    "open_position", "closed_position", "velocity", "force",
+                    "command_max_time_ms", "action_timeout_s", "poll_period_s",
+                },
+                f"robot.arms.{hand}.gripper",
+            )
+        arm_gripper = GripperConfig(
+            enabled=_boolean(arm_gripper_section.get("enabled", gripper_defaults.enabled), f"arms.{hand}.gripper.enabled"),
+            index=_integer(arm_gripper_section.get("index", gripper_defaults.index), f"arms.{hand}.gripper.index"),
+            activate_on_start=_boolean(arm_gripper_section.get("activate_on_start", gripper_defaults.activate_on_start), f"arms.{hand}.gripper.activate_on_start"),
+            initially_closed=_boolean(arm_gripper_section.get("initially_closed", gripper_defaults.initially_closed), f"arms.{hand}.gripper.initially_closed"),
+            open_position=_integer(arm_gripper_section.get("open_position", gripper_defaults.open_position), f"arms.{hand}.gripper.open_position"),
+            closed_position=_integer(arm_gripper_section.get("closed_position", gripper_defaults.closed_position), f"arms.{hand}.gripper.closed_position"),
+            velocity=_integer(arm_gripper_section.get("velocity", gripper_defaults.velocity), f"arms.{hand}.gripper.velocity"),
+            force=_integer(arm_gripper_section.get("force", gripper_defaults.force), f"arms.{hand}.gripper.force"),
+            command_max_time_ms=_integer(arm_gripper_section.get("command_max_time_ms", gripper_defaults.command_max_time_ms), f"arms.{hand}.gripper.command_max_time_ms"),
+            action_timeout_s=_number(arm_gripper_section.get("action_timeout_s", gripper_defaults.action_timeout_s), f"arms.{hand}.gripper.action_timeout_s"),
+            poll_period_s=_number(arm_gripper_section.get("poll_period_s", gripper_defaults.poll_period_s), f"arms.{hand}.gripper.poll_period_s"),
+        )
+        arm_ws_section = _section(arm_section, "workspace")
+        if arm_ws_section:
+            _reject_unknown(arm_ws_section, {"x", "y", "z"}, f"robot.arms.{hand}.workspace")
+        arm_workspace = WorkspaceBounds(
+            x=_bounds(arm_ws_section.get("x", workspace_defaults.x), f"arms.{hand}.workspace.x"),
+            y=_bounds(arm_ws_section.get("y", workspace_defaults.y), f"arms.{hand}.workspace.y"),
+            z=_bounds(arm_ws_section.get("z", workspace_defaults.z), f"arms.{hand}.workspace.z"),
+        )
+        arm_exaxis = _four_numbers(
+            arm_section.get("exaxis_default", list(exaxis_defaults)),
+            f"arms.{hand}.exaxis_default",
+        )
+        result.append(ArmConfig(
+            hand=hand,
+            robot_ip=arm_ip,
+            sdk_path=arm_sdk,
+            gripper=arm_gripper,
+            workspace=arm_workspace,
+            exaxis_default=arm_exaxis,
+        ))
+    return tuple(result)

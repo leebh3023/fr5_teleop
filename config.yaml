@@ -17,8 +17,8 @@ tls:
   key_path: certs/key.pem
 
 robot:
-  ip: 192.168.58.2
-  sdk_path: fairino-python-sdk-main/linux
+  ip: 192.168.58.3
+  sdk_path: /home/user/fairino-python-sdk-2.2.2_robot3.9.2/linux
   exaxis_default: [0.0, 0.0, 0.0, 0.0]
 
 timing:
@@ -26,21 +26,21 @@ timing:
   # ERROR log after this many start/end events occur inside the window.
   servo_transition_window_s: 1.0
   servo_transition_limit: 4
-  pose_timeout_s: 0.200
-  worker_watchdog_s: 0.500
-  worker_startup_timeout_s: 10.0
+  pose_timeout_s: 0.500
+  worker_watchdog_s: 3.0
+  worker_startup_timeout_s: 30.0
   graceful_shutdown_s: 2.0
 
 motion:
   position_scale: 500.0
-  ema_alpha: 0.25
+  ema_alpha: 0.2
   # Time-based speed limit. max_step_mm remains a per-command safety cap.
   max_velocity_mm_s: 50.0
   max_step_mm: 0.75
   workspace:
-    x: [-600.0, 600.0]
-    y: [-600.0, 600.0]
-    z: [50.0, 700.0]
+    x: [-100.0, 500.0]
+    y: [-360.0, -80.0]
+    z: [-160.0, 420.0]
 
 # Disabled by default. Enable only after controller-side gripper configuration
 # and a low-risk trigger/gripper commissioning test.

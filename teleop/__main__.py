@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--confirm-hardware",
         action="store_true",
-        help="required together with --robot to permit real hardware mode",
+        help="required to permit any real hardware mode",
     )
     parser.add_argument(
         "--sdk-path",
@@ -61,6 +61,9 @@ def resolve_config(
     except ValueError as exc:
         parser.error(str(exc))
 
+    if args.robot_ip and config.arms:
+        parser.error("--robot cannot override a bimanual robot.arms configuration")
+
     overrides = {
         "host": args.host,
         "port": args.port,
@@ -78,7 +81,7 @@ def resolve_config(
         config,
         **{key: value for key, value in overrides.items() if value is not None},
     )
-    if args.robot_ip:
+    if args.confirm_hardware or args.robot_ip:
         config = replace(config, dry_run=False)
     if args.dry_run:
         config = replace(config, dry_run=True)
@@ -116,7 +119,15 @@ def main(argv: list[str] | None = None) -> None:
         ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_context.load_cert_chain(config.tls_cert_path, config.tls_key_path)
 
-    mode = "DRY-RUN" if config.dry_run else f"HARDWARE {config.robot_ip}"
+    if config.arms:
+        arm_desc = ", ".join(
+            f"{a.hand}={a.robot_ip or 'dry-run'}" for a in config.arms
+        )
+        mode = f"BIMANUAL [{arm_desc}]" if not config.dry_run else f"DRY-RUN BIMANUAL [{arm_desc}]"
+    elif config.dry_run:
+        mode = "DRY-RUN"
+    else:
+        mode = f"HARDWARE {config.robot_ip}"
     logging.getLogger(__name__).info(
         "starting teleop mode=%s url=%s://%s:%d",
         mode,

@@ -12,9 +12,14 @@ elif [[ -x "${PROJECT_DIR}/.venv-linux/bin/python" ]]; then
 else
     PYTHON_BIN="python3"
 fi
+CONFIG_ARGS=()
+if [[ -n "${TELEOP_CONFIG:-}" ]]; then
+    CONFIG_ARGS=(--config "${TELEOP_CONFIG}")
+fi
 
 cd "${PROJECT_DIR}"
-"${PYTHON_BIN}" -m teleop --no-tls --host 127.0.0.1 --port "${PORT}" >"${LOG_FILE}" 2>&1 &
+"${PYTHON_BIN}" -m teleop "${CONFIG_ARGS[@]}" \
+    --no-tls --host 127.0.0.1 --port "${PORT}" >"${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
 
 cleanup() {

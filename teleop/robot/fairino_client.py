@@ -5,6 +5,7 @@ import inspect
 import logging
 import platform
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,20 @@ class FairinoRobotClient:
             raise RobotClientError(operation, None, "robot is not connected")
         method = getattr(self._robot, operation)
         self._expect_zero(method(*args, **kwargs), operation)
+
+    def _call_allow(
+        self, operation: str, allowed_codes: set[int], *args: Any, **kwargs: Any
+    ) -> None:
+        if self._robot is None:
+            raise RobotClientError(operation, None, "robot is not connected")
+        method = getattr(self._robot, operation)
+        code = self._code(method(*args, **kwargs), operation)
+        if code != 0 and code not in allowed_codes:
+            raise RobotClientError(operation, code)
+        if code != 0:
+            log.warning(
+                "%s returned code %d (permitted allowed code)", operation, code
+            )
 
     def _method_parameters(self, operation: str) -> set[str]:
         if self._robot is None:
@@ -172,10 +187,11 @@ class FairinoRobotClient:
         log.info("Fairino connection ready: ip=%s versions=%s", self.config.robot_ip, versions)
 
     def initialize(self) -> None:
-        self._call_zero("ResetAllError")
-        self._call_zero("Mode", 0)
-        self._call_zero("DragTeachSwitch", 0)
-        self._call_zero("RobotEnable", 1)
+        self._call_allow("ResetAllError", {14})
+        self._call_allow("Mode", {14}, 0)
+        self._call_allow("DragTeachSwitch", {14}, 0)
+        self._call_allow("RobotEnable", {14}, 1)
+        self._call_allow("SetSpeed", {14}, 100)
         if self.config.gripper.enabled and self.config.gripper.activate_on_start:
             self.activate_gripper()
 
@@ -208,10 +224,8 @@ class FairinoRobotClient:
             "mode": 0,
             "desc_pos": list(target),
             "pos_gain": [1.0] * 6,
-            # FAIRINO marks these controls as unavailable and documents zero
-            # as the supported default for Cartesian servo streaming.
-            "acc": 0.0,
-            "vel": 0.0,
+            "acc": 0.0 if self._servo_cart_supports_exaxis else 100.0,
+            "vel": 0.0 if self._servo_cart_supports_exaxis else 100.0,
             "cmdT": self.config.servo_period_s,
             "filterT": 0.0,
             "gain": 0.0,
@@ -301,9 +315,12 @@ class FairinoRobotClient:
         return GripperMotionState(fault=fault, done=done == 1)
 
     def reset_fault(self) -> None:
-        self._call_zero("ResetAllError")
-        self._call_zero("Mode", 0)
-        self._call_zero("RobotEnable", 1)
+        self._call_allow("ResetAllError", {14})
+        time.sleep(0.1)
+        self._call_allow("Mode", {14}, 0)
+        time.sleep(0.1)
+        self._call_allow("RobotEnable", {14}, 1)
+        time.sleep(0.2)
 
     def close(self) -> None:
         if self._robot is None:

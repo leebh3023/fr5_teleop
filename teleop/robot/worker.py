@@ -385,6 +385,8 @@ class RobotWorkerRuntime:
         self.reason = "grip_rising_edge"
         self._publish_status(now_ns, self.reason)
         try:
+            if self.require_release or self.fault is not None:
+                self._timed_call(self.client.reset_fault)
             self.robot_tcp = self._timed_call(self.client.get_current_tcp)
             self.planner.engage(pose.position_m, self.robot_tcp)
             self._timed_call(self.client.servo_start)

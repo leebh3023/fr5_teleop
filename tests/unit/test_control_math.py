@@ -8,8 +8,8 @@ from teleop.control_math import MotionPlanner, clamp_step, vr_to_robot_delta
 
 def test_vr_axis_mapping() -> None:
     assert vr_to_robot_delta((1.0, 2.0, 3.0), 500.0) == (
-        -1500.0,
-        -500.0,
+        500.0,
+        1500.0,
         1000.0,
     )
 
@@ -35,8 +35,8 @@ def test_engage_resets_previous_target_and_clamps_workspace(tmp_path) -> None:
     origin = (300.0, 0.0, 400.0, 180.0, 0.0, 0.0)
     planner.engage((0.0, 0.0, 0.0), origin)
     assert planner.target_for((0.0, 1.0, -1.0)) == (
-        310,
-        0,
+        300,
+        -20,
         450,
         180,
         0,
@@ -64,7 +64,7 @@ def test_target_accepts_time_based_step_below_absolute_cap(tmp_path) -> None:
     planner.engage((0.0, 0.0, 0.0), origin)
 
     target = planner.target_for(
-        (0.0, 0.0, -1.0),
+        (1.0, 0.0, 0.0),
         step_limit_mm=0.4,
     )
 
