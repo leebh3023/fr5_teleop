@@ -89,6 +89,7 @@ class RobotWorkerRuntime:
         self.servo_started = False
         self.robot_tcp: TcpPose | None = None
         self.robot_joints: tuple[float, float, float, float, float, float] | None = None
+        self.last_joints_fetch_ns = 0
         self.require_release = True
         self.last_grip = True
 
@@ -276,7 +277,10 @@ class RobotWorkerRuntime:
                     self.spec.generation,
                 )
                 continue
-            if self.state != WorkerState.ACTIVE or not fresh or not pose.grip:
+            if (
+                self.state not in {WorkerState.ACTIVE, WorkerState.IDLE, WorkerState.SLEEPING}
+                or not fresh
+            ):
                 log.info(
                     "trigger ignored generation=%d state=%s fresh=%s grip=%s",
                     self.spec.generation,
@@ -645,7 +649,11 @@ class RobotWorkerRuntime:
             else None
         )
         effective_reason = transition_reason or self.reason
-        if self.state not in (WorkerState.STARTING, WorkerState.SHUTDOWN):
+        if (
+            self.state not in (WorkerState.STARTING, WorkerState.SHUTDOWN)
+            and now_ns - self.last_joints_fetch_ns >= 200_000_000
+        ):
+            self.last_joints_fetch_ns = now_ns
             try:
                 self.robot_joints = self._timed_call(self.client.get_current_joints)
             except Exception:

@@ -32,11 +32,11 @@ timing:
   graceful_shutdown_s: 1.0
 
 motion:
-  position_scale: 500.0
+  position_scale: 900.0
   ema_alpha: 0.2
   # Time-based speed limit. max_step_mm remains a per-command safety cap.
-  max_velocity_mm_s: 50.0
-  max_step_mm: 0.75
+  max_velocity_mm_s: 150.0
+  max_step_mm: 2
   workspace:
     x: [-600.0, 600.0]
     y: [-600.0, 600.0]
