@@ -45,9 +45,9 @@ motion:
 # Disabled by default. Enable only after controller-side gripper configuration
 # and a low-risk trigger/gripper commissioning test.
 gripper:
-  enabled: false
+  enabled: true
   index: 1
-  activate_on_start: false
+  activate_on_start: true
   initially_closed: false
   open_position: 0
   closed_position: 100

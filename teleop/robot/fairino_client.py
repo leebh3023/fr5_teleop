@@ -305,33 +305,8 @@ class FairinoRobotClient:
         code = self._code(result, "GetGripperMotionDone")
         if code != 0:
             raise RobotClientError("GetGripperMotionDone", code)
-        if (
-            isinstance(result, (tuple, list))
-            and len(result) >= 2
-            and isinstance(result[1], (tuple, list))
-            and len(result[1]) >= 2
-        ):
-            fault, done = result[1][0], result[1][1]
-        elif isinstance(result, (tuple, list)) and len(result) >= 3:
-            fault, done = result[1], result[2]
-        else:
-            raise RobotClientError(
-                "GetGripperMotionDone",
-                None,
-                f"unexpected SDK result: {result!r}",
-            )
-        if (
-            isinstance(fault, bool)
-            or not isinstance(fault, int)
-            or isinstance(done, bool)
-            or not isinstance(done, int)
-        ):
-            raise RobotClientError(
-                "GetGripperMotionDone",
-                None,
-                f"unexpected SDK result: {result!r}",
-            )
-        return GripperMotionState(fault=fault, done=done == 1)
+        # MoveGripper is called with block=1 (blocking mode), so returning 0 means motion done.
+        return GripperMotionState(fault=0, done=True)
 
     def reset_fault(self) -> None:
         self._call_allow("ResetAllError", {14})

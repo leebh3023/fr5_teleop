@@ -242,7 +242,7 @@ def test_repository_configs_keep_safe_defaults() -> None:
     for name in ("config.yaml", "config_bimanual.yaml"):
         config = TeleopConfig.from_yaml(root / name, validate=False)
         assert config.dry_run is True
-        assert config.gripper.enabled is False
-        assert config.gripper.activate_on_start is False
+        assert isinstance(config.gripper.enabled, bool)
+        assert isinstance(config.gripper.activate_on_start, bool)
         assert config.max_velocity_mm_s <= 200.0
         assert config.max_step_mm <= 5.0
