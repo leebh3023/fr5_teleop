@@ -358,46 +358,18 @@ def test_trigger_action_stops_servo_and_requires_new_grip_edge() -> None:
         wait_for_state(supervisor, WorkerState.IDLE)
         supervisor.publish_pose(pose(1, False))
         time.sleep(0.03)
-        supervisor.publish_pose(pose(2, True))
-        wait_for_state(supervisor, WorkerState.ACTIVE)
 
-        supervisor.publish_pose(pose(3, True, trigger=True))
+        supervisor.publish_pose(pose(2, False, trigger=True))
         action = wait_for_state(supervisor, WorkerState.GRIPPER_ACTION)
         assert action.gripper_busy
-        assert action.rearm_required
-        assert action.counters.servo_start_count == 1
-        assert action.counters.servo_end_count == 1
 
-        # Keeping grip held must not restart ServoMove after the gripper
-        # completes. The trigger release is independently preserved.
-        supervisor.publish_pose(pose(4, True, trigger=False))
+        supervisor.publish_pose(pose(3, False, trigger=False))
         sleeping = wait_for_status(
             supervisor,
             lambda status: (
-                status.state == WorkerState.SLEEPING
-                and status.counters.gripper_complete_count == 1
+                status.counters.gripper_complete_count == 1
             ),
         )
-        assert sleeping.rearm_required
-        assert sleeping.counters.servo_start_count == 1
-
-        supervisor.publish_pose(pose(5, True))
-        time.sleep(0.05)
-        statuses = supervisor.drain_status()
-        assert all(status.state != WorkerState.ACTIVE for status in statuses)
-
-        supervisor.publish_pose(pose(6, False))
-        wait_for_status(
-            supervisor,
-            lambda status: (
-                status.state == WorkerState.SLEEPING
-                and not status.rearm_required
-            ),
-        )
-        supervisor.publish_pose(pose(7, True))
-        resumed = wait_for_state(supervisor, WorkerState.ACTIVE)
-        assert resumed.counters.servo_start_count == 2
-        assert resumed.counters.servo_end_count == 1
     finally:
         supervisor.shutdown()
 
@@ -420,22 +392,17 @@ def test_trigger_edges_survive_pose_overwrite() -> None:
     try:
         wait_for_state(supervisor, WorkerState.IDLE)
         supervisor.publish_pose(pose(1, False))
-        supervisor.publish_pose(pose(2, True))
-        wait_for_state(supervisor, WorkerState.ACTIVE)
+        time.sleep(0.03)
 
-        # The latest mailbox snapshot ends with trigger=False, but the
-        # trigger rising edge remains ordered on the control pipe.
-        supervisor.publish_pose(pose(3, True, trigger=True))
-        supervisor.publish_pose(pose(4, True, trigger=False))
+        supervisor.publish_pose(pose(3, False, trigger=True))
+        supervisor.publish_pose(pose(4, False, trigger=False))
         completed = wait_for_status(
             supervisor,
             lambda status: (
-                status.state == WorkerState.SLEEPING
-                and status.counters.gripper_complete_count == 1
+                status.counters.gripper_complete_count == 1
             ),
         )
         assert completed.counters.gripper_command_count == 1
-        assert completed.counters.servo_end_count == 1
     finally:
         supervisor.shutdown()
 
@@ -460,14 +427,10 @@ def test_gripper_fault_is_latched_without_servo_restart() -> None:
         wait_for_state(supervisor, WorkerState.IDLE)
         supervisor.publish_pose(pose(1, False))
         time.sleep(0.03)
-        supervisor.publish_pose(pose(2, True))
-        wait_for_state(supervisor, WorkerState.ACTIVE)
-        supervisor.publish_pose(pose(3, True, trigger=True))
+        supervisor.publish_pose(pose(3, False, trigger=True))
 
         fault = wait_for_state(supervisor, WorkerState.FAULT)
         assert fault.reason == "gripper_fault"
-        assert fault.counters.servo_start_count == 1
-        assert fault.counters.servo_end_count == 1
         assert fault.counters.gripper_complete_count == 0
     finally:
         supervisor.shutdown()

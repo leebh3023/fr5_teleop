@@ -278,8 +278,9 @@ class RobotWorkerRuntime:
                 )
                 continue
             if (
-                self.state not in {WorkerState.ACTIVE, WorkerState.IDLE, WorkerState.SLEEPING}
+                self.state not in {WorkerState.IDLE, WorkerState.SLEEPING}
                 or not fresh
+                or pose.grip
             ):
                 log.info(
                     "trigger ignored generation=%d state=%s fresh=%s grip=%s",
