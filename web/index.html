@@ -435,11 +435,22 @@ function refreshVRButton() {
   }
 }
 
-// WebXR 지원 확인
+// WebXR 지원 확인 (immersive-ar 우선, fallback immersive-vr)
+let preferredSessionMode = 'immersive-vr';
+
 if (navigator.xr) {
-  navigator.xr.isSessionSupported('immersive-vr').then(supported => {
+  Promise.all([
+    navigator.xr.isSessionSupported('immersive-ar').catch(() => false),
+    navigator.xr.isSessionSupported('immersive-vr').catch(() => false)
+  ]).then(([arSupported, vrSupported]) => {
     xrCheckComplete = true;
-    if (supported) {
+    if (arSupported) {
+      preferredSessionMode = 'immersive-ar';
+      xrSupported = true;
+      btnVR.addEventListener('click', startVR);
+      refreshVRButton();
+    } else if (vrSupported) {
+      preferredSessionMode = 'immersive-vr';
       xrSupported = true;
       btnVR.addEventListener('click', startVR);
       refreshVRButton();
@@ -454,10 +465,16 @@ if (navigator.xr) {
 
 async function startVR() {
   try {
-    xrSession = await navigator.xr.requestSession('immersive-vr', {
+    const sessionOptions = {
       requiredFeatures: ['local-floor'],
-      optionalFeatures: ['passthrough']
-    });
+      optionalFeatures: ['passthrough', 'dom-overlay']
+    };
+    try {
+      xrSession = await navigator.xr.requestSession(preferredSessionMode, sessionOptions);
+    } catch (modeErr) {
+      console.warn('Preferred session mode failed, falling back to immersive-vr:', modeErr);
+      xrSession = await navigator.xr.requestSession('immersive-vr', sessionOptions);
+    }
     lastXrFrameTimeMs = null;
     lastValidPoseTimeMs = null;
     maxXrFrameGapMs = 0;
@@ -466,7 +483,7 @@ async function startVR() {
     // WebXR은 렌더링할 3D 그래픽(WebGL) 레이어가 없으면 무한 로딩에 빠집니다.
     // 위치 추적만 하더라도 더미(Dummy) WebGL 캔버스를 만들어 연결해 주어야 합니다.
     const canvas = document.createElement('canvas');
-    gl = canvas.getContext('webgl', { xrCompatible: true, alpha: true });
+    gl = canvas.getContext('webgl', { xrCompatible: true, alpha: true, preserveDrawingBuffer: false });
     await gl.makeXRCompatible();
     xrSession.updateRenderState({
       baseLayer: new XRWebGLLayer(xrSession, gl)
