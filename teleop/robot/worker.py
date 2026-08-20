@@ -88,6 +88,7 @@ class RobotWorkerRuntime:
         self.fault: str | None = None
         self.servo_started = False
         self.robot_tcp: TcpPose | None = None
+        self.robot_joints: tuple[float, float, float, float, float, float] | None = None
         self.require_release = True
         self.last_grip = True
 
@@ -644,6 +645,11 @@ class RobotWorkerRuntime:
             else None
         )
         effective_reason = transition_reason or self.reason
+        if self.state not in (WorkerState.STARTING, WorkerState.SHUTDOWN):
+            try:
+                self.robot_joints = self._timed_call(self.client.get_current_joints)
+            except Exception:
+                pass
         status = WorkerStatus(
             generation=self.spec.generation,
             state=self.state,
@@ -652,6 +658,7 @@ class RobotWorkerRuntime:
             tick=self.tick,
             input_age_ms=input_age_ms,
             robot_tcp=self.robot_tcp,
+            joint_deg=self.robot_joints,
             jitter_ms=self.diagnostics.last_jitter_ms,
             sdk_call_ms=self.diagnostics.last_sdk_call_ms,
             counters=WorkerCounters(

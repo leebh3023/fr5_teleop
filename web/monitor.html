@@ -105,6 +105,15 @@
     </section>
 
     <section class="card">
+      <h2>Robot Joints (deg)</h2>
+      <div class="row"><span class="label">J1 / J2</span><span class="value" id="j1-j2">—</span></div>
+      <div class="row"><span class="label">J3 / J4</span><span class="value" id="j3-j4">—</span></div>
+      <div class="row"><span class="label">J5 / J6</span><span class="value" id="j5-j6">—</span></div>
+      <div class="row"><span class="label">Left (J1..J6)</span><span class="value" id="left-joints">—</span></div>
+      <div class="row"><span class="label">Right (J1..J6)</span><span class="value" id="right-joints">—</span></div>
+    </section>
+
+    <section class="card">
       <h2>판별 기준</h2>
       <div class="muted">
         RTT와 server receive gap만 커지면 Wi-Fi/TCP 경로를 우선 조사합니다.
@@ -170,6 +179,29 @@ function updateStatus(data) {
     `${counters.servo_start_count ?? 0} / ${counters.servo_cart_count ?? 0} / ${counters.servo_end_count ?? 0}`;
   byId('gripper-counts').textContent =
     `${counters.gripper_command_count ?? 0} / ${counters.gripper_complete_count ?? 0}`;
+
+  const joints = data.joint_deg;
+  if (Array.isArray(joints) && joints.length === 6) {
+    byId('j1-j2').textContent = `${fmt(joints[0], 1)}° / ${fmt(joints[1], 1)}°`;
+    byId('j3-j4').textContent = `${fmt(joints[2], 1)}° / ${fmt(joints[3], 1)}°`;
+    byId('j5-j6').textContent = `${fmt(joints[4], 1)}° / ${fmt(joints[5], 1)}°`;
+  } else {
+    byId('j1-j2').textContent = '—';
+    byId('j3-j4').textContent = '—';
+    byId('j5-j6').textContent = '—';
+  }
+
+  const arms = data.arms || {};
+  if (arms.left && Array.isArray(arms.left.joint_deg)) {
+    byId('left-joints').textContent = arms.left.joint_deg.map(j => fmt(j, 1) + '°').join(', ');
+  } else {
+    byId('left-joints').textContent = '—';
+  }
+  if (arms.right && Array.isArray(arms.right.joint_deg)) {
+    byId('right-joints').textContent = arms.right.joint_deg.map(j => fmt(j, 1) + '°').join(', ');
+  } else {
+    byId('right-joints').textContent = '—';
+  }
 
   const telemetry = data.client_telemetry;
   if (!telemetry) {

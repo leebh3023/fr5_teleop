@@ -46,6 +46,10 @@ class FakeRobotClient:
         self._before("get_current_tcp")
         return self.current_tcp
 
+    def get_current_joints(self) -> tuple[float, float, float, float, float, float]:
+        self._before("get_current_joints")
+        return (0.0, -90.0, 90.0, -90.0, 90.0, 0.0)
+
     def servo_start(self) -> None:
         self._before("servo_start")
         self.servo_active = True

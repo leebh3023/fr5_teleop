@@ -58,6 +58,7 @@ class WorkerStatus:
     gripper_enabled: bool = False
     gripper_busy: bool = False
     gripper_position: int | None = None
+    joint_deg: tuple[float, float, float, float, float, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)

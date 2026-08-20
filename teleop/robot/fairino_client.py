@@ -214,6 +214,25 @@ class FairinoRobotClient:
         pose = tuple(float(value) for value in result[1])
         return (pose[0], pose[1], pose[2], pose[3], pose[4], pose[5])
 
+    def get_current_joints(self) -> tuple[float, float, float, float, float, float]:
+        if self._robot is None:
+            raise RobotClientError("GetActualJointPosDegree", None, "robot is not connected")
+        result = self._robot.GetActualJointPosDegree()
+        code = self._code(result, "GetActualJointPosDegree")
+        if code != 0:
+            raise RobotClientError("GetActualJointPosDegree", code)
+        if (
+            not isinstance(result, (tuple, list))
+            or len(result) < 2
+            or not isinstance(result[1], (tuple, list))
+            or len(result[1]) != 6
+        ):
+            raise RobotClientError(
+                "GetActualJointPosDegree", None, f"unexpected SDK result: {result!r}"
+            )
+        joints = tuple(float(value) for value in result[1])
+        return (joints[0], joints[1], joints[2], joints[3], joints[4], joints[5])
+
     def servo_start(self) -> None:
         self._call_zero("ServoMoveStart")
 

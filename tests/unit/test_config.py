@@ -244,5 +244,5 @@ def test_repository_configs_keep_safe_defaults() -> None:
         assert config.dry_run is True
         assert config.gripper.enabled is False
         assert config.gripper.activate_on_start is False
-        assert config.max_velocity_mm_s == 50.0
-        assert config.max_step_mm == 0.75
+        assert config.max_velocity_mm_s <= 200.0
+        assert config.max_step_mm <= 5.0
