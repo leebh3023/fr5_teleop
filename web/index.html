@@ -455,7 +455,8 @@ if (navigator.xr) {
 async function startVR() {
   try {
     xrSession = await navigator.xr.requestSession('immersive-vr', {
-      requiredFeatures: ['local-floor']
+      requiredFeatures: ['local-floor'],
+      optionalFeatures: ['passthrough']
     });
     lastXrFrameTimeMs = null;
     lastValidPoseTimeMs = null;
@@ -465,7 +466,7 @@ async function startVR() {
     // WebXR은 렌더링할 3D 그래픽(WebGL) 레이어가 없으면 무한 로딩에 빠집니다.
     // 위치 추적만 하더라도 더미(Dummy) WebGL 캔버스를 만들어 연결해 주어야 합니다.
     const canvas = document.createElement('canvas');
-    gl = canvas.getContext('webgl', { xrCompatible: true });
+    gl = canvas.getContext('webgl', { xrCompatible: true, alpha: true });
     await gl.makeXRCompatible();
     xrSession.updateRenderState({
       baseLayer: new XRWebGLLayer(xrSession, gl)
@@ -513,11 +514,11 @@ function onXRFrame(time, frame) {
   }
   lastXrFrameTimeMs = time;
 
-  // 프레임마다 화면을 지워주어 VR 화면이 검은색(또는 회색) 빈 공간으로 정상 표시되게 합니다.
+  // 알파(Alpha)를 0으로 투명하게 지워주어 Meta Quest 3 패스스루(Passthrough) 카메라 화면이 배경에 노출되도록 합니다.
   if (gl && xrSession.renderState.baseLayer) {
     const layer = xrSession.renderState.baseLayer;
     gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
-    gl.clearColor(0.1, 0.1, 0.1, 1.0); // 어두운 회색
+    gl.clearColor(0.0, 0.0, 0.0, 0.0); // 투명 (Passthrough 투과)
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   }
 
