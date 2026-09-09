@@ -7,6 +7,16 @@ release candidate로 표시한다.
 
 ### Added
 
+- optional rotation (roll/pitch/yaw) teleop behind `orientation.enabled`
+  (default `false`): the VR controller quaternion is now mapped to the
+  robot's rx,ry,rz target, with per-tick angular-step and
+  origin-deviation clamps mirroring the existing position limiter.
+  Fairino's rx,ry,rz Euler convention is not documented anywhere in the
+  vendor SDK; the implementation assumes the common industrial fixed-axis
+  XYZ convention and isolates that assumption to a handful of pure
+  functions in `control_math.py`. Not yet verified on real hardware — see
+  AGENTS.md's manual real-robot test protocol before enabling outside
+  dry-run.
 - Quest XR frame/controller pose gap, tracking loss, WebSocket RTT,
   buffered bytes와 pose send/drop을 보고하는 1초 client telemetry
 - control lease를 claim하지 않는 `/monitor` 작업자 화면

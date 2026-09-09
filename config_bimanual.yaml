@@ -70,3 +70,14 @@ gripper:
   command_max_time_ms: 3000
   action_timeout_s: 5.0
   poll_period_s: 0.050
+
+# Disabled by default; not yet per-arm configurable. See AGENTS.md: the
+# Fairino rx,ry,rz Euler convention is not documented by the vendor SDK and
+# axis/sign have not been verified on real hardware.
+orientation:
+  enabled: false
+  scale: 1.0
+  ema_alpha: 0.2
+  max_angular_velocity_deg_s: 15.0
+  max_step_deg: 1.0
+  max_deviation_deg: 20.0

@@ -114,7 +114,9 @@ vendor SDK 소스가 보고하는 버전은 `SDK V2.2.7 / Robot V3.9.7`이지만
 - native Ubuntu target에서의 10분 timing/soak와 p50/p95/p99 집계
 - 실제 systemd 설치, reboot start, stop timeout
 - Quest에서 TLS trust, WebXR session, controller mapping, 재연결 UX
-- 회전 teleop
+- 회전 teleop: `orientation.enabled`(기본 `false`) 뒤에 구현되어 있으나, Fairino의
+  rx,ry,rz Euler 컨벤션과 축/부호가 실제 로봇에서 아직 검증되지 않았다.
+  활성화 전 "실제 로봇 수동 테스트"의 단일축 회전 검증 절차를 통과해야 한다.
 - 장기 metric exporter
 
 SDK의 `example/` 파일은 테스트가 아니다. 실제 로봇을 즉시 움직이는 top-level 코드가 많으므로 agent는 이를 자동 실행하지 않는다.
@@ -222,6 +224,14 @@ gripper:
     command_max_time_ms
     action_timeout_s
     poll_period_s
+
+orientation:
+    enabled
+    scale
+    ema_alpha
+    max_angular_velocity_deg_s
+    max_step_deg
+    max_deviation_deg
 ```
 
 현장 rc2 피드백을 반영한 dry-run 기준값은
@@ -234,6 +244,10 @@ start/end를 완화하고, 낮춘 step/velocity 제한은 늘어난 입력 만�
 아니며 하드웨어 승인값도 아니다. 실제 로봇 테스트 결과 없이 timeout,
 step, velocity, workspace, scale 제한을 완화하지 않는다. 그리퍼는
 controller 설정과 저위험 commissioning 전까지 기본 비활성이다.
+`orientation`도 같은 이유로 기본 비활성(`enabled: false`)이며,
+`max_step_deg=1.0`/`max_angular_velocity_deg_s=15.0`/`max_deviation_deg=20.0`은
+Fairino의 rx,ry,rz 컨벤션이 실제 로봇에서 축별로 검증되기 전까지의
+보수적 시작값이다.
 
 CLI보다 YAML config 파일을 기준으로 하고 CLI는 배포별 경로나 dry-run
 선택을 override한다. 상대 경로는 해당 YAML 파일의 디렉터리를 기준으로
@@ -448,7 +462,18 @@ grip=true일 때만 접수한다. 접수 전에 `ServoMoveEnd()`를 완료하고
 - motion limiter는 실제 ServoCart 전송 간격에
   `max_velocity_mm_s`를 곱한 time-based step과 `max_step_mm`의
   작은 값을 적용한다. 긴 지연 한 번이 큰 보정 명령으로 바뀌지 않는다.
-- 회전 텔레옵은 현재 범위가 아니다. orientation은 protocol에서 수집·검증하되 초기 구현은 robot origin orientation을 유지한다.
+- 회전 텔레옵은 `orientation.enabled`(기본 `false`)로 게이팅된다. 비활성 시
+  `MotionPlanner.target_for()`는 이전과 동일하게 `robot_origin`의 rx,ry,rz를
+  그대로 유지한다. 활성 시 VR 쿼터니언 delta를 `remap_quat_vr_to_robot`으로
+  로봇 프레임에 매핑하고 `robot_origin_orientation`에 합성한 뒤,
+  `orientation.max_step_deg`(틱당)와 `orientation.max_deviation_deg`(origin
+  대비 누적 총량)로 이중 클램프한다. Fairino의 rx,ry,rz Euler 컨벤션은 벤더
+  SDK 어디에도 문서화되어 있지 않아 산업용 6축 로봇의 통상 관례(고정축
+  XYZ = 내인성 Z·Y·X, `R = Rz·Ry·Rx`)로 가정했으며, 이 가정은
+  `euler_deg_to_quat`/`quat_to_euler_deg`/`remap_quat_vr_to_robot`/
+  `compose_delta_orientation` 네 함수에만 격리되어 있다. 실제 로봇에서
+  축/부호가 다르게 나오면 이 함수들만 고치면 되고, 그 전까지는
+  `orientation.enabled: true`를 필드 config에 반영하지 않는다.
 - `MAX_DELTA_PER_STEP` 같은 중복 제한을 만들지 않는다. 실제 적용되는 step 제한은 config 한 곳에만 둔다.
 - status에는 tick period, jitter, SDK call duration, overrun, missed tick을 포함한다.
 
@@ -657,6 +682,9 @@ fault_count by reason
 - quaternion/position validation
 - EMA 초기화와 새 clutch reset
 - workspace와 step 제한
+- 쿼터니언 연산(정규화/곱/slerp/delta)과 Euler 왕복 변환, gimbal lock 처리
+- orientation 축 remap, 틱당/누적 회전 클램프, `orientation.enabled=false`일 때
+  기존 위치 전용 출력과의 회귀 동일성
 - state transition 전 경우
 - SDK 반환 int/tuple/error normalization
 - config 범위 검증
@@ -719,6 +747,14 @@ python -m teleop --dry-run --no-tls
 8. worker process termination
 9. 작은 단일 축 이동
 10. 3축 제한 이동
+11. `orientation.enabled: true`(작은 `max_deviation_deg`, 느린
+    `max_angular_velocity_deg_s`) commissioning: 중립이 아닌 현재 TCP
+    자세에서 arm한 뒤 roll → pitch → yaw 순으로 한 축씩만 저속 소회전을
+    명령하고, teaching pendant/`GetActualTCPPose`로 실제 회전축과 부호가
+    명령과 일치하는지 기록한다. 세 축을 개별 확인한 뒤에만 다축 동시
+    회전, 이어서 위치+회전 동시 이동을 시험한다. 불일치가 발견되면
+    `euler_deg_to_quat`/`quat_to_euler_deg`/`remap_quat_vr_to_robot`/
+    `compose_delta_orientation` 중 해당하는 함수만 수정한다.
 
 각 단계에서 예상 SDK 호출, 실제 정지 시간, controller error를 기록한다.
 
@@ -737,6 +773,8 @@ python -m teleop --dry-run --no-tls
 - worker 강제 종료 뒤 자동 motion 재개 없음
 - reboot 후 systemd 기동 및 stop timeout 검증
 - 실제 로봇에서는 controller가 승인한 정지 시간과 통신 단절 동작을 별도 기록
+- `orientation.enabled: true`는 실제 로봇에서 roll/pitch/yaw 각 축의 명령 대비
+  실측 방향/부호가 개별 기록된 뒤에만 필드 config 후보가 된다
 
 ±2 ms jitter는 성능 목표이지 안전 보증이 아니다. 달성하지 못하면 측정 근거를 남기고 SDK 통신 방식, OS scheduling, controller buffering을 조사한 뒤 목표를 재승인한다.
 

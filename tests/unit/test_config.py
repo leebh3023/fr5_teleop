@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from teleop.config import ArmConfig, GripperConfig, TeleopConfig
+from teleop.config import ArmConfig, GripperConfig, OrientationConfig, TeleopConfig
 from teleop.__main__ import build_parser, resolve_config
 
 
@@ -246,3 +246,71 @@ def test_repository_configs_keep_safe_defaults() -> None:
         assert isinstance(config.gripper.activate_on_start, bool)
         assert config.max_velocity_mm_s <= 200.0
         assert config.max_step_mm <= 5.0
+        assert config.orientation.enabled is False
+
+
+def test_orientation_disabled_by_default() -> None:
+    assert TeleopConfig().orientation.enabled is False
+    assert TeleopConfig().orientation == OrientationConfig()
+
+
+def test_yaml_loads_orientation_section(tmp_path: Path) -> None:
+    path = write_config(tmp_path / "config.yaml")
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + """
+orientation:
+  enabled: true
+  scale: 0.5
+  ema_alpha: 0.3
+  max_angular_velocity_deg_s: 10.0
+  max_step_deg: 2.0
+  max_deviation_deg: 15.0
+""",
+        encoding="utf-8",
+    )
+
+    config = TeleopConfig.from_yaml(path)
+
+    assert config.orientation.enabled is True
+    assert config.orientation.scale == 0.5
+    assert config.orientation.ema_alpha == 0.3
+    assert config.orientation.max_angular_velocity_deg_s == 10.0
+    assert config.orientation.max_step_deg == 2.0
+    assert config.orientation.max_deviation_deg == 15.0
+
+
+def test_yaml_rejects_unknown_orientation_keys(tmp_path: Path) -> None:
+    path = write_config(tmp_path / "config.yaml")
+    path.write_text(
+        path.read_text(encoding="utf-8") + "\norientation:\n  bogus: 1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unknown orientation key"):
+        TeleopConfig.from_yaml(path)
+
+
+@pytest.mark.parametrize(
+    "overrides,message",
+    [
+        ({"scale": 0.0}, "orientation.scale must be positive"),
+        ({"ema_alpha": 0.0}, "orientation.ema_alpha must be in"),
+        ({"ema_alpha": 1.5}, "orientation.ema_alpha must be in"),
+        (
+            {"max_angular_velocity_deg_s": -1.0},
+            "orientation.max_angular_velocity_deg_s must be positive",
+        ),
+        ({"max_step_deg": 0.0}, "orientation.max_step_deg must be positive"),
+        ({"max_deviation_deg": 0.0}, "orientation.max_deviation_deg must be in"),
+        ({"max_deviation_deg": 91.0}, "orientation.max_deviation_deg must be in"),
+    ],
+)
+def test_orientation_config_range_validation(overrides, message) -> None:
+    config = TeleopConfig(
+        tls_cert_path=None,
+        tls_key_path=None,
+        orientation=OrientationConfig(**overrides),
+    )
+    with pytest.raises(ValueError, match=message):
+        config.validate()

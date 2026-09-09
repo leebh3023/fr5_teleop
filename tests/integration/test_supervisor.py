@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import replace
 from pathlib import Path
 
 from teleop.app import TeleopRuntime
-from teleop.config import ArmConfig, GripperConfig, TeleopConfig
+from teleop.config import ArmConfig, GripperConfig, OrientationConfig, TeleopConfig
+from teleop.control_math import axis_angle_to_quat
 from teleop.protocol import PoseMessage
 from teleop.robot.fake_client import FakeRobotBehavior
 from teleop.robot.state import ControlCommand, WorkerState
@@ -33,6 +35,7 @@ def pose(
     *,
     trigger: bool = False,
     hand: str = "right",
+    orientation_xyzw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0),
 ) -> PoseMessage:
     return PoseMessage(
         session_id="test",
@@ -40,7 +43,7 @@ def pose(
         client_time_ms=float(seq),
         hand=hand,
         position_m=(x, 1.0, 0.0),
-        orientation_xyzw=(0.0, 0.0, 0.0, 1.0),
+        orientation_xyzw=orientation_xyzw,
         grip=grip,
         trigger=trigger,
         received_ns=time.monotonic_ns(),
@@ -403,6 +406,68 @@ def test_trigger_edges_survive_pose_overwrite() -> None:
             ),
         )
         assert completed.counters.gripper_command_count == 1
+    finally:
+        supervisor.shutdown()
+
+
+def test_orientation_disabled_keeps_robot_tcp_rotation_fixed() -> None:
+    supervisor = RobotSupervisor(make_config())
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        time.sleep(0.03)
+        rotated = axis_angle_to_quat((0.0, 1.0, 0.0), math.radians(45))
+        supervisor.publish_pose(pose(2, True, 0.01, orientation_xyzw=rotated))
+        active = wait_for_state(supervisor, WorkerState.ACTIVE)
+        origin_rotation = active.robot_tcp[3:]
+
+        supervisor.publish_pose(pose(3, True, 0.02, orientation_xyzw=rotated))
+        moved = wait_for_status(
+            supervisor,
+            lambda status: status.counters.servo_cart_count >= 2,
+        )
+        assert moved.robot_tcp[3:] == origin_rotation
+    finally:
+        supervisor.shutdown()
+
+
+def test_orientation_enabled_rotates_robot_tcp_toward_controller() -> None:
+    config = replace(
+        make_config(),
+        orientation=OrientationConfig(
+            enabled=True,
+            ema_alpha=1.0,
+            max_step_deg=90.0,
+            max_angular_velocity_deg_s=10_000.0,
+            max_deviation_deg=90.0,
+        ),
+    )
+    supervisor = RobotSupervisor(config)
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        time.sleep(0.03)
+        supervisor.publish_pose(pose(2, True, 0.01))
+        active = wait_for_state(supervisor, WorkerState.ACTIVE)
+        origin_rotation = active.robot_tcp[3:]
+
+        rotated = axis_angle_to_quat((0.0, 1.0, 0.0), math.radians(30))
+        for seq in range(3, 20):
+            supervisor.publish_pose(
+                pose(seq, True, 0.01, orientation_xyzw=rotated)
+            )
+            time.sleep(0.01)
+        moved = wait_for_status(
+            supervisor,
+            lambda status: (
+                status.state == WorkerState.ACTIVE
+                and status.robot_tcp is not None
+                and status.robot_tcp[3:] != origin_rotation
+            ),
+        )
+        assert moved.robot_tcp[3:] != origin_rotation
     finally:
         supervisor.shutdown()
 

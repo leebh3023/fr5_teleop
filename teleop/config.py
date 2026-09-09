@@ -70,6 +70,37 @@ class GripperConfig:
 
 
 @dataclass(frozen=True)
+class OrientationConfig:
+    """Disabled by default. See AGENTS.md: the Fairino rx,ry,rz Euler
+    convention is not documented by the vendor SDK and is assumed here
+    (fixed-angle XYZ) pending real-robot single-axis verification."""
+
+    enabled: bool = False
+    scale: float = 1.0
+    ema_alpha: float = 0.2
+    max_angular_velocity_deg_s: float = 15.0
+    max_step_deg: float = 1.0
+    max_deviation_deg: float = 20.0
+
+    def validate(self) -> None:
+        if not isfinite(self.scale) or self.scale <= 0:
+            raise ValueError("orientation.scale must be positive")
+        if not isfinite(self.ema_alpha) or not (0.0 < self.ema_alpha <= 1.0):
+            raise ValueError("orientation.ema_alpha must be in (0, 1]")
+        if (
+            not isfinite(self.max_angular_velocity_deg_s)
+            or self.max_angular_velocity_deg_s <= 0
+        ):
+            raise ValueError("orientation.max_angular_velocity_deg_s must be positive")
+        if not isfinite(self.max_step_deg) or self.max_step_deg <= 0:
+            raise ValueError("orientation.max_step_deg must be positive")
+        if not isfinite(self.max_deviation_deg) or not (
+            0.0 < self.max_deviation_deg <= 90.0
+        ):
+            raise ValueError("orientation.max_deviation_deg must be in (0, 90]")
+
+
+@dataclass(frozen=True)
 class ArmConfig:
     """Per-arm configuration for bimanual teleoperation."""
     hand: str
@@ -122,6 +153,7 @@ class TeleopConfig:
     max_step_mm: float = 0.75
     workspace: WorkspaceBounds = field(default_factory=WorkspaceBounds)
     gripper: GripperConfig = field(default_factory=GripperConfig)
+    orientation: OrientationConfig = field(default_factory=OrientationConfig)
     exaxis_default: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     max_ws_message_bytes: int = 4096
     allowed_origins: tuple[str, ...] = ()
@@ -213,6 +245,7 @@ class TeleopConfig:
                 raise ValueError(f"TLS key not found: {self.tls_key_path}")
         self.workspace.validate()
         self.gripper.validate()
+        self.orientation.validate()
 
     @classmethod
     def from_yaml(cls, path: Path, *, validate: bool = True) -> TeleopConfig:
@@ -227,7 +260,16 @@ class TeleopConfig:
         root = _mapping(raw, "config")
         _reject_unknown(
             root,
-            {"runtime", "server", "tls", "robot", "timing", "motion", "gripper"},
+            {
+                "runtime",
+                "server",
+                "tls",
+                "robot",
+                "timing",
+                "motion",
+                "gripper",
+                "orientation",
+            },
             "config",
         )
         runtime = _section(root, "runtime")
@@ -238,6 +280,7 @@ class TeleopConfig:
         motion = _section(root, "motion")
         workspace = _section(motion, "workspace")
         gripper = _section(root, "gripper")
+        orientation = _section(root, "orientation")
 
         _reject_unknown(runtime, {"dry_run", "log_level", "status_hz"}, "runtime")
         _reject_unknown(
@@ -288,6 +331,18 @@ class TeleopConfig:
                 "poll_period_s",
             },
             "gripper",
+        )
+        _reject_unknown(
+            orientation,
+            {
+                "enabled",
+                "scale",
+                "ema_alpha",
+                "max_angular_velocity_deg_s",
+                "max_step_deg",
+                "max_deviation_deg",
+            },
+            "orientation",
         )
 
         defaults = cls()
@@ -453,6 +508,39 @@ class TeleopConfig:
                         defaults.gripper.poll_period_s,
                     ),
                     "gripper.poll_period_s",
+                ),
+            ),
+            orientation=OrientationConfig(
+                enabled=_boolean(
+                    orientation.get("enabled", defaults.orientation.enabled),
+                    "orientation.enabled",
+                ),
+                scale=_number(
+                    orientation.get("scale", defaults.orientation.scale),
+                    "orientation.scale",
+                ),
+                ema_alpha=_number(
+                    orientation.get("ema_alpha", defaults.orientation.ema_alpha),
+                    "orientation.ema_alpha",
+                ),
+                max_angular_velocity_deg_s=_number(
+                    orientation.get(
+                        "max_angular_velocity_deg_s",
+                        defaults.orientation.max_angular_velocity_deg_s,
+                    ),
+                    "orientation.max_angular_velocity_deg_s",
+                ),
+                max_step_deg=_number(
+                    orientation.get(
+                        "max_step_deg", defaults.orientation.max_step_deg
+                    ),
+                    "orientation.max_step_deg",
+                ),
+                max_deviation_deg=_number(
+                    orientation.get(
+                        "max_deviation_deg", defaults.orientation.max_deviation_deg
+                    ),
+                    "orientation.max_deviation_deg",
                 ),
             ),
             exaxis_default=_four_numbers(

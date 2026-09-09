@@ -394,7 +394,7 @@ class RobotWorkerRuntime:
             if self.require_release or self.fault is not None:
                 self._timed_call(self.client.reset_fault)
             self.robot_tcp = self._timed_call(self.client.get_current_tcp)
-            self.planner.engage(pose.position_m, self.robot_tcp)
+            self.planner.engage(pose.position_m, pose.orientation_xyzw, self.robot_tcp)
             self._timed_call(self.client.servo_start)
             self.servo_started = True
             self.counters.servo_start_count += 1
@@ -450,9 +450,15 @@ class RobotWorkerRuntime:
                 self.config.max_step_mm,
                 self.config.max_velocity_mm_s * elapsed_s,
             )
+            angular_step_limit_deg = min(
+                self.config.orientation.max_step_deg,
+                self.config.orientation.max_angular_velocity_deg_s * elapsed_s,
+            )
             self.robot_tcp = self.planner.target_for(
                 pose.position_m,
+                pose.orientation_xyzw,
                 step_limit_mm=step_limit_mm,
+                angular_step_limit_deg=angular_step_limit_deg,
             )
             self._timed_call(self.client.servo_cart, self.robot_tcp)
             self.last_servo_command_ns = now_ns

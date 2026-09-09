@@ -94,7 +94,18 @@ motion:
   max_step_mm: 0.75
 gripper:
   enabled: false
+orientation:
+  enabled: false
 ```
+
+회전(roll/pitch/yaw) teleop은 `orientation.enabled`(기본 `false`)로 켠다.
+그리퍼와 마찬가지로 기본은 실험적/비활성이다: Fairino의 rx,ry,rz Euler
+컨벤션이 vendor SDK 어디에도 문서화되어 있지 않아, 표준 산업용 관례로
+가정하고 구현했지만 실제 로봇에서 축/부호를 검증하기 전까지는 켜지
+않는다(`AGENTS.md`의 실제 로봇 수동 테스트 참고). `orientation.max_step_deg`,
+`orientation.max_angular_velocity_deg_s`, `orientation.max_deviation_deg`는
+위치의 `max_step_mm`/`max_velocity_mm_s`/workspace에 대응하는 보수적
+안전값이다.
 
 `timing.servo_transition_window_s` 안에
 `timing.servo_transition_limit`개 이상의 `ServoMoveStart/End` 전환이

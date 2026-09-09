@@ -255,7 +255,14 @@ Fairino adapter
   한 번에 초기화한다.
 - grip release, stale, session loss, FAULT에서는 ramp-down만 믿지 않고
   `ServoMoveEnd`를 실행한다.
-- orientation teleop이 구현되기 전에는 robot origin orientation을 유지한다.
+- orientation teleop은 `orientation.enabled`(기본 `false`) 뒤에 구현되어
+  있다. 비활성 시에는 이전과 동일하게 robot origin orientation을
+  유지한다. 활성 시에도 `orientation.max_deviation_deg`(기본 20°)로 origin
+  대비 누적 회전을 제한하는데, 이는 §5의 ROBOTIS reference-divergence
+  gate(위치 0.1 m / orientation jump 30° per-sample)와는 별개로 독립
+  도출된 값이다 — ROBOTIS 값은 "연속 샘플 간 점프"를 잡는 latch
+  threshold이고, 이 값은 "clutch engage 이후 누적 총 편차"를 잡는 별도의
+  commissioning-safety bound다.
 
 ### SDK cadence 판정
 
