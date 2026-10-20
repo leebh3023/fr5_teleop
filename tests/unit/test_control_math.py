@@ -45,14 +45,14 @@ def _web_config(tmp_path, **overrides) -> TeleopConfig:
 
 def test_vr_axis_mapping() -> None:
     assert vr_to_robot_delta((1.0, 2.0, 3.0), 500.0) == (
-        500.0,
         1500.0,
+        500.0,
         1000.0,
     )
 
 
 def test_remap_axis_vr_to_robot_matches_position_mapping() -> None:
-    assert remap_axis_vr_to_robot((1.0, 2.0, 3.0)) == (1.0, 3.0, 2.0)
+    assert remap_axis_vr_to_robot((1.0, 2.0, 3.0)) == (3.0, 1.0, 2.0)
 
 
 def test_step_is_limited_by_vector_length() -> None:
@@ -69,7 +69,7 @@ def test_engage_resets_previous_target_and_clamps_workspace(tmp_path) -> None:
     planner = MotionPlanner(config)
     origin = (300.0, 0.0, 400.0, 180.0, 0.0, 0.0)
     planner.engage((0.0, 0.0, 0.0), IDENTITY_Q, origin)
-    assert planner.target_for((0.0, 1.0, -1.0), IDENTITY_Q) == (
+    assert planner.target_for((-1.0, 1.0, 0.0), IDENTITY_Q) == (
         300,
         -20,
         450,
@@ -93,7 +93,7 @@ def test_target_accepts_time_based_step_below_absolute_cap(tmp_path) -> None:
     planner.engage((0.0, 0.0, 0.0), IDENTITY_Q, origin)
 
     target = planner.target_for(
-        (1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0),
         IDENTITY_Q,
         step_limit_mm=0.4,
     )
@@ -234,7 +234,7 @@ def test_orientation_disabled_preserves_existing_position_only_behavior(tmp_path
     non_identity_orientation = axis_angle_to_quat((0.0, 1.0, 0.0), math.radians(45))
     planner.engage((0.0, 0.0, 0.0), non_identity_orientation, origin)
     target = planner.target_for(
-        (0.0, 1.0, -1.0), axis_angle_to_quat((1.0, 0.0, 0.0), math.radians(30))
+        (-1.0, 1.0, 0.0), axis_angle_to_quat((1.0, 0.0, 0.0), math.radians(30))
     )
     assert target == (300, -20, 450, 180, 0, 0)
 

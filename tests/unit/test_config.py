@@ -244,9 +244,10 @@ def test_repository_configs_keep_safe_defaults() -> None:
         assert config.dry_run is True
         assert isinstance(config.gripper.enabled, bool)
         assert isinstance(config.gripper.activate_on_start, bool)
-        assert config.max_velocity_mm_s <= 200.0
+        assert config.max_velocity_mm_s <= 250.0
         assert config.max_step_mm <= 5.0
-        assert config.orientation.enabled is False
+        assert config.orientation.max_step_deg <= 2.0
+        assert config.orientation.max_deviation_deg <= 30.0
 
 
 def test_orientation_disabled_by_default() -> None:

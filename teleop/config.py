@@ -72,9 +72,9 @@ class GripperConfig:
 
 @dataclass(frozen=True)
 class OrientationConfig:
-    """Disabled by default. The Fairino rx,ry,rz Euler
-    convention is not documented by the vendor SDK and is assumed here
-    (fixed-angle XYZ) pending real-robot single-axis verification."""
+    """Disabled by default in code. The vendor SDK does not document the
+    Fairino rx,ry,rz Euler convention; fixed-angle XYZ is assumed and its
+    roll/pitch/yaw axis and sign were verified on a v3.9.8 robot."""
 
     enabled: bool = False
     scale: float = 1.0

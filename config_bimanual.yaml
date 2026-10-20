@@ -71,9 +71,8 @@ gripper:
   action_timeout_s: 5.0
   poll_period_s: 0.050
 
-# Disabled by default; not yet per-arm configurable. The
-# Fairino rx,ry,rz Euler convention is not documented by the vendor SDK and
-# axis/sign have not been verified on real hardware.
+# Disabled here: not yet per-arm configurable. Roll/pitch/yaw were verified
+# on a single v3.9.8 arm (see config.yaml); check both arms before enabling.
 orientation:
   enabled: false
   scale: 1.0

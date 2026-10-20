@@ -31,7 +31,7 @@ git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에
 
 **config와 이미지는 같은 버전을 쓴다.** config는 알 수 없는 키를 거부하므로,
 새 버전의 `config.yaml`을 옛 이미지로 실행하면 시작 단계에서 실패할 수 있다.
-아래 예시는 모두 `v0.3.0`(이미지 태그 `0.3.0`) 기준이다.
+아래 예시는 모두 `v0.3.1`(이미지 태그 `0.3.1`) 기준이다.
 
 #### 공통 준비 (최초 1회)
 
@@ -70,7 +70,7 @@ git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에
 sudo apt-get install -y git          # git이 없을 때만
 git clone https://github.com/leebh3023/fr5_teleop.git ~/fr5_teleop
 cd ~/fr5_teleop
-git checkout v0.3.0                  # 이미지 태그 0.3.0과 맞춤
+git checkout v0.3.1                  # 이미지 태그 0.3.1과 맞춤
 ```
 
 - 저장소에 `Dockerfile`도 있지만 현장에서는 쓰지 않는다. 이미지는 아래
@@ -91,7 +91,7 @@ cd ~/fr5_teleop
 **B-1. GitHub에서 직접 받기 (현장 PC에 인터넷이 있을 때)**
 
 ```bash
-V=v0.3.0
+V=v0.3.1
 for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh; do
     curl -fsSL -o "$f" "https://raw.githubusercontent.com/leebh3023/fr5_teleop/$V/$f"
 done
@@ -99,7 +99,7 @@ done
 
 **B-2. 개발 PC에서 복사 (scp 또는 USB)**
 
-개발 PC의 저장소에서 같은 버전(`git checkout v0.3.0`)으로 맞춘 뒤 복사한다.
+개발 PC의 저장소에서 같은 버전(`git checkout v0.3.1`)으로 맞춘 뒤 복사한다.
 
 ```bash
 # 개발 PC에서 실행
@@ -138,7 +138,7 @@ USB 복사로 실행 권한이 빠질 수 있으므로 항상 `bash scripts/make
 3. 이미지 버전을 고정하고 받는다.
 
    ```bash
-   echo "TELEOP_TAG=0.3.0" > .env
+   echo "TELEOP_TAG=0.3.1" > .env
    docker compose pull
    ```
 4. 현장 로봇에 맞게 `config.yaml`을 고친다(`robot.ip`, `motion.workspace`,
@@ -162,7 +162,7 @@ USB 복사로 실행 권한이 빠질 수 있으므로 항상 `bash scripts/make
 ├── compose.yaml
 ├── config.yaml            # 현장에서 수정
 ├── config_bimanual.yaml   # 현장에서 수정
-├── .env                   # TELEOP_TAG=0.3.0
+├── .env                   # TELEOP_TAG=0.3.1
 ├── scripts/make_cert.sh
 ├── certs/cert.pem, key.pem
 └── recordings/            # 녹화 결과 (호스트에 남음)
@@ -231,7 +231,7 @@ docker compose run --rm teleop      # dry-run 실행
 ```
 
 릴리스: `teleop/__init__.py`의 `__version__`을 올리고 같은 이름의 태그
-(`v0.3.0`)를 push한다.
+(`v0.3.1`)를 push한다.
 
 손목 카메라(RealSense)를 컨테이너에서 쓰는 설정은 아직 포함하지 않았다.
 카메라 의존성은 이미지에 들어 있지만 USB 장치 전달과 호스트 udev 규칙은 다음
@@ -291,11 +291,11 @@ orientation:
   enabled: false
 ```
 
-회전(roll/pitch/yaw) teleop은 `orientation.enabled`(기본 `false`)로 켠다.
-그리퍼와 마찬가지로 기본은 실험적/비활성이다: Fairino의 rx,ry,rz Euler
-컨벤션이 vendor SDK 어디에도 문서화되어 있지 않아, 표준 산업용 관례로
-가정하고 구현했지만 실제 로봇에서 축/부호를 검증하기 전까지는 켜지
-않는다(실제 로봇에서 한 축씩 수동 검증한 뒤 켠다). `orientation.max_step_deg`,
+회전(roll/pitch/yaw) teleop은 `orientation.enabled`로 켠다. 코드 기본값은
+`false`이고 저장소의 `config.yaml`은 켜 둔다. Fairino의 rx,ry,rz Euler 컨벤션은
+vendor SDK에 문서화되어 있지 않아 표준 산업용 관례(fixed-angle XYZ)로
+가정했고, v3.9.8 로봇에서 roll/pitch/yaw 축과 부호를 검증했다.
+`config_bimanual.yaml`은 팔별 설정이 아직 없어 꺼 둔다. `orientation.max_step_deg`,
 `orientation.max_angular_velocity_deg_s`, `orientation.max_deviation_deg`는
 위치의 `max_step_mm`/`max_velocity_mm_s`/workspace에 대응하는 보수적
 안전값이다.
