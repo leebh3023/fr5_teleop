@@ -68,9 +68,19 @@ class WorkerIpc:
     control_send: Any
     status_queue: Any
     heartbeat_ns: Any
+    # Worker -> parent batches of recording samples; None when recording is off.
+    sample_queue: Any = None
 
 
-def create_worker_ipc(context: BaseContext) -> WorkerIpc:
+# About 5 s of 10-tick sample batches at the 8 ms servo period.
+SAMPLE_QUEUE_BATCHES = 64
+
+
+def create_worker_ipc(
+    context: BaseContext,
+    *,
+    with_samples: bool = False,
+) -> WorkerIpc:
     control_receive, control_send = context.Pipe(duplex=False)
     return WorkerIpc(
         mailbox=LatestPoseMailbox(context),
@@ -78,4 +88,7 @@ def create_worker_ipc(context: BaseContext) -> WorkerIpc:
         control_send=control_send,
         status_queue=context.Queue(maxsize=32),
         heartbeat_ns=context.Value("Q", 0, lock=False),
+        sample_queue=(
+            context.Queue(maxsize=SAMPLE_QUEUE_BATCHES) if with_samples else None
+        ),
     )

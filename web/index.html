@@ -152,13 +152,34 @@
   </div>
 </div>
 
+<div class="card" id="card-record">
+  <h2>시연 녹화</h2>
+  <div class="status-row">
+    <span>녹화 상태</span>
+    <span class="mono" id="rec-state">—</span>
+  </div>
+  <div class="status-row">
+    <span>다음 task</span>
+    <span class="mono" id="rec-task">—</span>
+  </div>
+  <div class="status-row">
+    <span>마지막 저장</span>
+    <span class="mono" id="rec-last">—</span>
+  </div>
+</div>
+
 <div class="card instructions">
   <b>그립 버튼</b>을 꾹 누르면 로봇이 손을 따라갑니다.<br>
   놓으면 정지, 다시 누르면 현재 위치에서 재시작합니다.<br>
   <b>트리거</b>는 설정된 경우 그리퍼를 전환하며, 이후 grip을 놓았다
-  다시 눌러야 로봇 추적이 재개됩니다.
+  다시 눌러야 로봇 추적이 재개됩니다.<br>
+  <b>A</b> 녹화 시작 / 성공 저장 · <b>B</b> 실패 저장 ·
+  <b>B 1초</b> 폐기 (오른손). task는 /monitor에서 입력합니다.<br>
+  녹화 중에는 시야 위쪽에 빨간 불이 깜빡이고, 저장되면 초록(성공) 또는
+  주황(실패)으로 바뀝니다.
 </div>
 
+<script src="/static/recording_controls.js"></script>
 <script>
 // ──────────────────────────────────────────
 //  WebSocket
@@ -241,6 +262,9 @@ function connectWS() {
         maxRttMs = maxRttMs === null ? rtt : Math.max(maxRttMs, rtt);
       } else if (data.type === 'error') {
         console.warn('Protocol error:', data.message);
+        if (data.code === 'recording_unavailable') {
+          recordFeedback('error', 'error');
+        }
       }
     } catch(err) {
       console.warn('Invalid server message:', err);
@@ -270,6 +294,126 @@ function sendEvent(event) {
     session_id: sessionId,
     event: event
   }));
+}
+
+// ──────────────────────────────────────────
+//  시연 녹화 (A/B 버튼, haptics, 시야 상태등)
+// ──────────────────────────────────────────
+let latestRecording = null;
+let recordFlash = null;
+let recordGamepad = null;
+const recordButtons = new RecordButtons();
+const recordTracker = new RecordStatusTracker();
+
+function recorderState() {
+  if (!latestRecording) return null;
+  return latestRecording.alive ? latestRecording.state : 'DOWN';
+}
+
+function playHaptic(pattern) {
+  const steps = RECORD_HAPTICS[pattern];
+  const actuator = recordGamepad && recordGamepad.hapticActuators
+    ? recordGamepad.hapticActuators[0]
+    : null;
+  if (!steps || !actuator || typeof actuator.pulse !== 'function') return;
+  let delayMs = 0;
+  for (const [intensity, durationMs, pauseMs] of steps) {
+    setTimeout(() => {
+      try { actuator.pulse(intensity, durationMs); } catch (_) { /* unsupported */ }
+    }, delayMs);
+    delayMs += durationMs + pauseMs;
+  }
+}
+
+function recordFeedback(haptic, flashColor) {
+  if (haptic) playHaptic(haptic);
+  if (flashColor) {
+    recordFlash = { color: flashColor, untilMs: performance.now() + FLASH_MS };
+  }
+}
+
+function sendRecord(command) {
+  if (!ws || ws.readyState !== WebSocket.OPEN || !sessionId) {
+    recordFeedback('error', 'error');
+    return;
+  }
+  const message = {
+    version: 1,
+    type: 'record',
+    session_id: sessionId,
+    action: command.action,
+  };
+  if (command.outcome) message.outcome = command.outcome;
+  ws.send(JSON.stringify(message));
+  recordTracker.commandSent(performance.now());
+}
+
+function handleRecordCommand(command) {
+  if (!command) return;
+  if (command.action === 'rejected') {
+    recordFeedback('error', 'error');
+    return;
+  }
+  sendRecord(command);
+  if (command.action === 'start') {
+    recordFeedback('start', null);
+  } else if (command.action === 'discard') {
+    recordFeedback('discard', 'discard');
+  } else {
+    recordFeedback(command.outcome, null);
+  }
+}
+
+function updateRecordUI(recording) {
+  latestRecording = recording || null;
+  const result = recordTracker.observe(latestRecording, performance.now());
+  if (result) {
+    if (result.flash) recordFlash = result.flash;
+    if (result.haptic) playHaptic(result.haptic);
+  }
+  const stateEl = document.getElementById('rec-state');
+  if (!latestRecording) {
+    stateEl.textContent = '비활성 (config)';
+    document.getElementById('rec-task').textContent = '—';
+    document.getElementById('rec-last').textContent = '—';
+    return;
+  }
+  const state = recorderState();
+  const camera = latestRecording.camera;
+  const cameraNote = camera && !camera.streaming ? ' · 카메라 없음' : '';
+  stateEl.textContent = state === 'RECORDING'
+    ? `🔴 녹화 중 #${latestRecording.episode_index} ${(latestRecording.elapsed_s || 0).toFixed(1)}s`
+    : `${state}${cameraNote}`;
+  document.getElementById('rec-task').textContent =
+    latestRecording.next_task || '없음 — /monitor에서 입력';
+  const last = latestRecording.last_saved;
+  document.getElementById('rec-last').textContent = last
+    ? `#${last.episode_index} ${last.outcome}${last.complete ? '' : ' (불완전)'}`
+    : '—';
+}
+
+function drawRecordLight(frame, now) {
+  const color = recordLightColor(recorderState(), recordFlash, now);
+  const layer = xrSession.renderState.baseLayer;
+  if (!color || !gl || !layer || !refSpace) return;
+  const viewerPose = frame.getViewerPose(refSpace);
+  if (!viewerPose) return;
+  // Head-locked light at the same spot in both eyes, above the view center.
+  gl.enable(gl.SCISSOR_TEST);
+  gl.clearColor(color[0], color[1], color[2], 1.0);
+  for (const view of viewerPose.views) {
+    const viewport = layer.getViewport(view);
+    const width = Math.round(viewport.width * 0.05);
+    const height = Math.round(viewport.height * 0.025);
+    gl.scissor(
+      viewport.x + Math.round((viewport.width - width) / 2),
+      viewport.y + Math.round(viewport.height * 0.68),
+      width,
+      height
+    );
+    gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+  gl.disable(gl.SCISSOR_TEST);
 }
 
 // hand별 독립 시퀀스 카운터 (bimanual 모드)
@@ -343,6 +487,7 @@ function sendClientTelemetry() {
 }
 
 function updateStatusUI(data) {
+  updateRecordUI(data.recording);
   const trackEl = document.getElementById('track-status');
   const cardCtrl = document.getElementById('card-ctrl');
 
@@ -504,6 +649,8 @@ async function startVR() {
       lastValidPoseTimeMs = null;
       gripLatchedByHand = { left: false, right: false, none: false };
       triggerLatchedByHand = { left: false, right: false, none: false };
+      recordButtons.reset();
+      recordGamepad = null;
       document.getElementById('dot-xr').className = 'dot red';
       document.getElementById('xr-status').textContent = '종료됨';
       btnVR.textContent = '🥽 VR 세션 시작';
@@ -540,6 +687,24 @@ function onXRFrame(time, frame) {
   }
 
   const sources = Array.from(xrSession.inputSources);
+
+  // 녹화 버튼: 오른손 A(buttons[4]) / B(buttons[5]), xr-standard mapping.
+  // 녹화는 로봇을 움직이지 않으므로 grip/lease와 독립적으로 처리한다.
+  const now = performance.now();
+  const recordSource = sources.find(source => (
+    source.handedness === 'right' && source.gamepad
+  ));
+  recordGamepad = recordSource ? recordSource.gamepad : null;
+  if (recordGamepad) {
+    const buttons = recordGamepad.buttons;
+    handleRecordCommand(recordButtons.update(
+      Boolean(buttons[4] && buttons[4].pressed),
+      Boolean(buttons[5] && buttons[5].pressed),
+      now,
+      recorderState()
+    ));
+  }
+  drawRecordLight(frame, now);
   let controlSources;
   if (controlHands.length > 1) {
     controlSources = sources.filter(source => (

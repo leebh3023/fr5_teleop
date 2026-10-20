@@ -44,7 +44,7 @@ def vr_to_robot_delta(vr_delta_m: Vector3, scale_mm_per_m: float) -> Vector3:
 # the common industrial-arm "fixed-angle XYZ" convention (R = Rz * Ry *
 # Rx). This assumption is isolated to those two functions plus
 # remap_quat_vr_to_robot/compose_delta_orientation, so a wrong guess is a
-# targeted fix after real-robot single-axis verification (see AGENTS.md),
+# targeted fix after real-robot single-axis verification,
 # not a broader redesign.
 
 
@@ -168,7 +168,7 @@ def quat_to_euler_deg(q: Quaternion) -> Vector3:
 def compose_delta_orientation(origin_q: Quaternion, delta_q: Quaternion) -> Quaternion:
     """World-frame composition: delta applied on top of origin.
 
-    If real-robot verification (AGENTS.md manual single-axis test)
+    If real-robot verification (manual single-axis test)
     shows the SDK actually composes in the tool/local frame instead,
     this is the only function to change (to
     quat_multiply(origin_q, delta_q)).

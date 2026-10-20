@@ -29,17 +29,21 @@ certs/*.pem
 *.sock
 
 # Vendored Fairino SDK: keep the Linux Python source and metadata only.
-fairino-python-sdk-main/windows/
-fairino-python-sdk-main/**/build/
-fairino-python-sdk-main/**/libfairino/
-fairino-python-sdk-main/**/example/
-fairino-python-sdk-main/**/*.obj
-fairino-python-sdk-main/**/*.o
-fairino-python-sdk-main/**/*.lib
-fairino-python-sdk-main/**/*.exp
+fairino-python-sdk-*/windows/
+fairino-python-sdk-*/**/build/
+fairino-python-sdk-*/**/libfairino/
+fairino-python-sdk-*/**/example/
+fairino-python-sdk-*/**/*.obj
+fairino-python-sdk-*/**/*.o
+fairino-python-sdk-*/**/*.lib
+fairino-python-sdk-*/**/*.exp
 
 # Local packaging output
 build/
 dist/
 release/
 *.egg-info/
+
+# Demonstration recordings (raw episodes and converted datasets)
+recordings/
+datasets/

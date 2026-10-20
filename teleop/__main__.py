@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
+import signal
 import ssl
 from dataclasses import replace
 from pathlib import Path
 
 from aiohttp import web
+from aiohttp.web_runner import GracefulExit
 
 from teleop.app import create_app
 from teleop.config import PROJECT_ROOT, TeleopConfig
+
+log = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,6 +106,31 @@ def resolve_config(
     return config
 
 
+def _install_shutdown_signals(loop: asyncio.AbstractEventLoop) -> None:
+    """Shut down on the first SIGINT/SIGTERM and ignore every later one.
+
+    Ctrl+C on a TTY (terminal, ``docker compose run``) is often pressed
+    several times. aiohttp's default handler raises GracefulExit on every
+    signal, and a repeat during cleanup cancels runtime.stop(): the robot
+    worker never receives SHUTDOWN and interpreter exit then blocks forever
+    joining it, leaving the open episode unfinalized. The handlers are
+    detached from the loop before ignoring, because loop.close() would
+    otherwise restore the default disposition while shutdown is still
+    running. A hung shutdown therefore needs SIGKILL (``docker kill``).
+    """
+    signals = (signal.SIGINT, signal.SIGTERM)
+
+    def handle(signame: str) -> None:
+        for sig in signals:
+            loop.remove_signal_handler(sig)
+            signal.signal(sig, signal.SIG_IGN)
+        log.info("%s received: shutting down (further signals ignored)", signame)
+        raise GracefulExit()
+
+    for sig in signals:
+        loop.add_signal_handler(sig, handle, sig.name)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -128,19 +158,23 @@ def main(argv: list[str] | None = None) -> None:
         mode = "DRY-RUN"
     else:
         mode = f"HARDWARE {config.robot_ip}"
-    logging.getLogger(__name__).info(
+    log.info(
         "starting teleop mode=%s url=%s://%s:%d",
         mode,
         "https" if ssl_context else "http",
         config.host,
         config.port,
     )
+    loop = asyncio.new_event_loop()
+    _install_shutdown_signals(loop)
     web.run_app(
         create_app(config),
         host=config.host,
         port=config.port,
         ssl_context=ssl_context,
         print=None,
+        handle_signals=False,
+        loop=loop,
     )
 
 

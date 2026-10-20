@@ -1,3 +1,4 @@
+import ctypes
 from pathlib import Path
 
 import pytest
@@ -270,3 +271,55 @@ def test_connection_state_supports_legacy_spelling(
 ) -> None:
     rpc_type = type("RpcType", (), attributes)
     assert FairinoRobotClient._connection_state(rpc_type) is expected
+
+
+class StubStatePkg(ctypes.Structure):
+    _fields_ = [
+        ("frame_cnt", ctypes.c_uint8),
+        ("jt_cur_pos", ctypes.c_double * 6),
+        ("tl_cur_pos", ctypes.c_double * 6),
+        ("actual_qd", ctypes.c_double * 6),
+        ("gripper_position", ctypes.c_uint8),
+        ("hour", ctypes.c_uint8),
+        ("minute", ctypes.c_uint8),
+        ("second", ctypes.c_uint8),
+        ("millisecond", ctypes.c_uint16),
+    ]
+
+
+def test_state_snapshot_reads_cnde_cache_without_rpc() -> None:
+    client = FairinoRobotClient(TeleopConfig(robot_ip="192.168.58.2"))
+    robot = StubRobot()
+    client._robot = robot
+
+    # Older SDKs keep the bare class until the first state packet arrives.
+    robot.robot_state_pkg = StubStatePkg
+    assert client.get_state_snapshot() is None
+
+    pkg = StubStatePkg()
+    pkg.frame_cnt = 17
+    pkg.jt_cur_pos[:] = [1, 2, 3, 4, 5, 6]
+    pkg.tl_cur_pos[:] = [300, 0, 400, 180, 0, 0]
+    pkg.actual_qd[:] = [0.5] * 6
+    pkg.gripper_position = 42
+    pkg.hour, pkg.minute, pkg.second, pkg.millisecond = 1, 2, 3, 456
+    robot.robot_state_pkg = pkg
+
+    snapshot = client.get_state_snapshot()
+    assert snapshot.joint_pos_deg == (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    assert snapshot.tcp == (300.0, 0.0, 400.0, 180.0, 0.0, 0.0)
+    assert snapshot.joint_vel_deg_s == (0.5,) * 6
+    assert snapshot.gripper_position == 42.0
+    assert snapshot.frame_cnt == 17
+    assert snapshot.robot_time_ms == ((1 * 60 + 2) * 60 + 3) * 1000 + 456
+
+
+def test_state_snapshot_rejects_unknown_state_layout() -> None:
+    class OtherPkg(ctypes.Structure):
+        _fields_ = [("frame_cnt", ctypes.c_uint8)]
+
+    client = FairinoRobotClient(TeleopConfig(robot_ip="192.168.58.2"))
+    client._robot = StubRobot()
+    client._robot.robot_state_pkg = OtherPkg()
+    with pytest.raises(RobotClientError, match="unexpected SDK state layout"):
+        client.get_state_snapshot()

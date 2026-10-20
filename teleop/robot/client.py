@@ -25,12 +25,26 @@ class GripperMotionState:
     done: bool
 
 
+@dataclass(frozen=True)
+class RobotStateSnapshot:
+    """Controller-pushed robot state read from a local cache, never an RPC."""
+
+    joint_pos_deg: tuple[float, float, float, float, float, float]
+    joint_vel_deg_s: tuple[float, float, float, float, float, float]
+    tcp: TcpPose
+    gripper_position: float
+    frame_cnt: int
+    robot_time_ms: int
+
+
 class RobotClient(Protocol):
     def connect(self) -> None: ...
 
     def initialize(self) -> None: ...
 
     def get_current_tcp(self) -> TcpPose: ...
+
+    def get_state_snapshot(self) -> RobotStateSnapshot | None: ...
 
     def servo_start(self) -> None: ...
 

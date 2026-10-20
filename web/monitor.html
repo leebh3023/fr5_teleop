@@ -60,6 +60,35 @@
   .bad { color: #fb7185; }
   .muted { color: #94a3b8; }
   #fault { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .recording-card { grid-column: 1 / -1; }
+  .recording-card textarea {
+    width: 100%;
+    min-height: 56px;
+    margin: 8px 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    background: #0b1220;
+    color: inherit;
+    font: inherit;
+    resize: vertical;
+  }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .buttons button {
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 1px solid #334155;
+    background: #1e293b;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .buttons button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .buttons .start { border-color: #2563eb; }
+  .buttons .success { border-color: #16a34a; }
+  .buttons .failure { border-color: #d97706; }
+  .buttons .discard { border-color: #e11d48; }
+  #rec-state.recording { color: #fb7185; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -73,6 +102,27 @@
   </div>
 
   <div class="grid">
+    <section class="card recording-card">
+      <h2>Demonstration recording</h2>
+      <label class="label" for="rec-task">Language instruction (task)</label>
+      <textarea id="rec-task" placeholder="예: pick up the red cube and place it in the box"></textarea>
+      <div class="buttons">
+        <button class="start" id="rec-start" disabled>● 녹화 시작</button>
+        <button class="success" id="rec-success" disabled>✔ 성공 저장</button>
+        <button class="failure" id="rec-failure" disabled>✘ 실패 저장</button>
+        <button class="discard" id="rec-discard" disabled>폐기</button>
+      </div>
+      <div class="row"><span class="label">Recorder</span><span class="value" id="rec-state">—</span></div>
+      <div class="row"><span class="label">Next task (Quest A)</span><span class="value" id="rec-next-task">—</span></div>
+      <div class="row"><span class="label">Episode / elapsed</span><span class="value" id="rec-episode">—</span></div>
+      <div class="row"><span class="label">Samples / dropped batches</span><span class="value" id="rec-samples">—</span></div>
+      <div class="row"><span class="label">Camera</span><span class="value" id="rec-camera">—</span></div>
+      <div class="row"><span class="label">Camera frames / dropped</span><span class="value" id="rec-camera-frames">—</span></div>
+      <div class="row"><span class="label">Saved this session</span><span class="value" id="rec-saved">—</span></div>
+      <div class="row"><span class="label">Last saved</span><span class="value" id="rec-last">—</span></div>
+      <div class="row"><span class="label">Error</span><span class="value" id="rec-error">—</span></div>
+    </section>
+
     <section class="card">
       <h2>Control state</h2>
       <div class="row"><span class="label">WebSocket</span><span class="value" id="ws">연결 중</span></div>
@@ -134,6 +184,112 @@ let previousTelemetry = null;
 let latestPoseDropDelta = 0;
 let latestTrackingLossDelta = 0;
 let previousControllerId = null;
+let socket = null;
+let sessionId = null;
+let recorderState = null;
+// null when no camera is configured; otherwise whether frames are arriving.
+let cameraStreaming = null;
+
+const TASK_KEY = 'vr-teleop.record-task';
+try {
+  byId('rec-task').value = localStorage.getItem(TASK_KEY) || '';
+} catch (_) { /* storage unavailable */ }
+let taskSyncTimer = null;
+byId('rec-task').addEventListener('input', () => {
+  try { localStorage.setItem(TASK_KEY, byId('rec-task').value); } catch (_) {}
+  updateRecordButtons();
+  // The Quest A button starts with the server's next task, so keep it synced.
+  clearTimeout(taskSyncTimer);
+  taskSyncTimer = setTimeout(syncTask, 500);
+});
+
+function syncTask() {
+  const task = byId('rec-task').value.trim();
+  if (task) sendRecord('set_task', { task });
+}
+
+function sendRecord(action, extra = {}) {
+  if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) return;
+  socket.send(JSON.stringify({
+    version: 1, type: 'record', session_id: sessionId, action, ...extra,
+  }));
+}
+
+byId('rec-start').onclick = () => {
+  sendRecord('start', { task: byId('rec-task').value.trim() });
+};
+byId('rec-success').onclick = () => sendRecord('stop', { outcome: 'success' });
+byId('rec-failure').onclick = () => sendRecord('stop', { outcome: 'failure' });
+byId('rec-discard').onclick = () => {
+  if (confirm('현재 에피소드를 저장하지 않고 삭제합니다.')) sendRecord('discard');
+};
+
+function updateRecordButtons() {
+  const connected = socket && socket.readyState === WebSocket.OPEN && sessionId;
+  const idle = recorderState === 'IDLE';
+  const recording = recorderState === 'RECORDING';
+  byId('rec-start').disabled =
+    !connected || !idle || !byId('rec-task').value.trim()
+    || cameraStreaming === false;
+  byId('rec-success').disabled = !connected || !recording;
+  byId('rec-failure').disabled = !connected || !recording;
+  byId('rec-discard').disabled = !connected || !(recording || recorderState === 'FINALIZING');
+}
+
+function updateRecording(recording) {
+  if (!recording) {
+    recorderState = null;
+    byId('rec-state').textContent = 'config에서 비활성 (recording.enabled)';
+    byId('rec-state').className = 'value muted';
+    updateRecordButtons();
+    return;
+  }
+  recorderState = recording.alive ? recording.state : 'DOWN';
+  const nextTask = recording.next_task || '';
+  byId('rec-next-task').textContent = nextTask || '없음';
+  byId('rec-next-task').className =
+    `value ${!nextTask ? 'bad' : (nextTask === byId('rec-task').value.trim() ? 'ok' : 'warn')}`;
+  byId('rec-state').textContent = recording.alive ? recording.state : 'RECORDER DOWN';
+  byId('rec-state').className =
+    `value ${!recording.alive ? 'bad' : (recording.state === 'RECORDING' ? 'recording' : 'ok')}`;
+  byId('rec-episode').textContent = recording.episode_index == null
+    ? `next #${recording.next_index ?? '—'}`
+    : `#${recording.episode_index} / ${fmt(recording.elapsed_s)} s`;
+  const counts = Object.entries(recording.samples || {})
+    .map(([hand, n]) => `${hand} ${n}`).join(', ') || '0';
+  const dropped = (recording.dropped_batches ?? 0);
+  byId('rec-samples').textContent = `${counts} / ${dropped}`;
+  severity(byId('rec-samples'), dropped, 1, 1);
+  byId('rec-saved').textContent = `${recording.saved_count ?? 0}`;
+  const last = recording.last_saved;
+  const lastFrames = last
+    ? Object.values(last.camera_frames || {}).map(n => `, ${n} frames`).join('')
+    : '';
+  byId('rec-last').textContent = last
+    ? `#${last.episode_index} ${last.outcome}${last.complete ? '' : ' (incomplete)'} ${fmt(last.duration_s)} s${lastFrames}`
+    : '—';
+
+  const camera = recording.camera;
+  cameraStreaming = camera ? Boolean(camera.streaming) : null;
+  if (!camera) {
+    byId('rec-camera').textContent = '사용 안 함 (recording.camera.enabled)';
+    byId('rec-camera').className = 'value muted';
+    byId('rec-camera-frames').textContent = '—';
+  } else {
+    byId('rec-camera').textContent = camera.streaming
+      ? `${camera.name} ${fmt(camera.fps)} fps${camera.serial ? ` (${camera.serial})` : ''}`
+      : `${camera.name} NOT STREAMING`;
+    byId('rec-camera').className = `value ${camera.streaming ? 'ok' : 'bad'}`;
+    byId('rec-camera-frames').textContent = camera.episode_frames == null
+      ? '—'
+      : `${camera.episode_frames} / ${camera.episode_dropped}`;
+    severity(byId('rec-camera-frames'), camera.episode_dropped ?? NaN, 1, 1);
+  }
+  const error = recording.last_error || camera?.last_error;
+  byId('rec-error').textContent = error || '—';
+  byId('rec-error').className = `value ${error ? 'bad' : 'muted'}`;
+  updateRecordButtons();
+}
 
 function severity(element, value, warn, bad) {
   element.className = 'value';
@@ -155,6 +311,7 @@ function updateStatus(data) {
     latestPoseDropDelta = 0;
     latestTrackingLossDelta = 0;
   }
+  updateRecording(data.recording);
   const state = data.state || '—';
   byId('state').textContent = state;
   byId('state').className = `value ${state === 'FAULT' ? 'bad' : (state === 'ACTIVE' ? 'ok' : 'warn')}`;
@@ -277,16 +434,27 @@ function updateStatus(data) {
 
 function connect() {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${scheme}://${location.host}/ws`);
+  socket = new WebSocket(`${scheme}://${location.host}/ws`);
   socket.onopen = () => {
     byId('ws').textContent = 'CONNECTED';
     byId('ws').className = 'value ok';
   };
   socket.onmessage = event => {
     const data = JSON.parse(event.data);
-    if (data.type === 'status') updateStatus(data);
+    if (data.type === 'hello') {
+      sessionId = data.session_id;
+      syncTask();
+      updateRecordButtons();
+    } else if (data.type === 'status') {
+      updateStatus(data);
+    } else if (data.type === 'error' && data.code === 'recording_unavailable') {
+      byId('rec-error').textContent = data.message;
+      byId('rec-error').className = 'value bad';
+    }
   };
   socket.onclose = () => {
+    sessionId = null;
+    updateRecordButtons();
     byId('ws').textContent = 'DISCONNECTED';
     byId('ws').className = 'value bad';
     setTimeout(connect, 2000);

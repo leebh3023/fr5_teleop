@@ -21,6 +21,9 @@ log = logging.getLogger(__name__)
 # Sentinel hand name used when running in single-robot (legacy) mode.
 SINGLE_ARM_HAND = "right"
 
+# (worker generation, dropped batch count so far, flat sample tuples)
+SampleBatch = tuple[int, int, list[tuple[Any, ...]]]
+
 
 @dataclass(frozen=True)
 class SupervisorHealth:
@@ -163,7 +166,10 @@ class RobotSupervisor:
         slot.generation += 1
         slot.last_grip = None
         slot.last_trigger = None
-        slot.ipc = create_worker_ipc(slot.context)
+        slot.ipc = create_worker_ipc(
+            slot.context,
+            with_samples=slot.config.recording.enabled,
+        )
         spec = WorkerSpec(
             generation=slot.generation,
             config=slot.config,
@@ -178,6 +184,7 @@ class RobotSupervisor:
                 slot.ipc.control_receive,
                 slot.ipc.status_queue,
                 slot.ipc.heartbeat_ns,
+                slot.ipc.sample_queue,
             ),
             name=f"RobotWorker-{slot.hand}-{slot.generation}",
             daemon=False,
@@ -278,6 +285,22 @@ class RobotSupervisor:
                         slot.latest_status = status
                         statuses.append(status)
             result[slot.hand] = statuses
+        return result
+
+    def drain_samples_by_hand(self) -> dict[str, list[SampleBatch]]:
+        """Return recording sample batches; empty when recording is off."""
+        result: dict[str, list[SampleBatch]] = {}
+        for slot in self._slots.values():
+            if slot.ipc is None or slot.ipc.sample_queue is None:
+                continue
+            batches: list[SampleBatch] = []
+            while True:
+                try:
+                    batches.append(slot.ipc.sample_queue.get_nowait())
+                except queue.Empty:
+                    break
+            if batches:
+                result[slot.hand] = batches
         return result
 
     def latest_status_by_hand(self) -> dict[str, WorkerStatus | None]:
@@ -417,11 +440,14 @@ class RobotSupervisor:
                 connection.close()
             except OSError:
                 pass
-        try:
-            slot.ipc.status_queue.close()
-            slot.ipc.status_queue.cancel_join_thread()
-        except (AttributeError, OSError, ValueError):
-            pass
+        for worker_queue in (slot.ipc.status_queue, slot.ipc.sample_queue):
+            if worker_queue is None:
+                continue
+            try:
+                worker_queue.close()
+                worker_queue.cancel_join_thread()
+            except (AttributeError, OSError, ValueError):
+                pass
         slot.ipc = None
 
     # ── helpers ───────────────────────────────────────────

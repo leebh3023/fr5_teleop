@@ -19,19 +19,19 @@ tls:
   key_path: certs/key.pem
 
 robot:
-  sdk_path: /home/user/fairino-python-sdk-2.2.2_robot3.9.2/linux
+  # Bundled SDK 2.2.8 for robot firmware v3.9.8; both arms use it unless
+  # an arm sets its own sdk_path.
+  sdk_path: fairino-python-sdk-2.2.8_robot_v3.9.8/linux
   exaxis_default: [0.0, 0.0, 0.0, 0.0]
   arms:
     left:
-      ip: 192.168.58.2  # Left arm (Robot V3.7.8)
-      sdk_path: /home/user/fairino-python-sdk-2.0.8_robot3.7.8/linux
+      ip: 192.168.58.2  # Left arm (Robot v3.9.8)
       workspace:
         x: [-600.0, 600.0]
         y: [-600.0, 600.0]
         z: [-500.0, 700.0]
     right:
-      ip: 192.168.59.3  # Right arm (Robot V3.9.2)
-      sdk_path: /home/user/fairino-python-sdk-2.2.2_robot3.9.2/linux
+      ip: 192.168.59.3  # Right arm (Robot v3.9.8)
       workspace:
         x: [-100.0, 500.0]
         y: [-360.0, -80.0]
@@ -71,7 +71,7 @@ gripper:
   action_timeout_s: 5.0
   poll_period_s: 0.050
 
-# Disabled by default; not yet per-arm configurable. See AGENTS.md: the
+# Disabled by default; not yet per-arm configurable. The
 # Fairino rx,ry,rz Euler convention is not documented by the vendor SDK and
 # axis/sign have not been verified on real hardware.
 orientation:
@@ -81,3 +81,20 @@ orientation:
   max_angular_velocity_deg_s: 15.0
   max_step_deg: 1.0
   max_deviation_deg: 20.0
+
+# Raw demonstration recording. Observation-only; control it from /monitor.
+recording:
+  enabled: false
+  root_dir: recordings
+  # Wrist RealSense D435i. Requires requirements-camera.txt and the
+  # librealsense udev rules. Recording refuses to start while it is enabled
+  # but not streaming. source: fake gives synthetic frames for dry-run tests.
+  camera:
+    enabled: false
+    source: realsense
+    name: wrist
+    serial: null        # set when more than one RealSense is connected
+    width: 640
+    height: 480
+    fps: 30
+    depth: false        # 16-bit depth aligned to color, FFV1 lossless

@@ -65,7 +65,19 @@ class ClientTelemetry:
         }
 
 
-ClientMessage = PoseMessage | ControlEvent | ClientTelemetry
+@dataclass(frozen=True)
+class RecordCommand:
+    """Episode recording control. Never moves the robot."""
+
+    session_id: str
+    action: str
+    task: str | None = None
+    outcome: str | None = None
+
+
+MAX_TASK_CHARS = 1000
+
+ClientMessage = PoseMessage | ControlEvent | ClientTelemetry | RecordCommand
 
 
 def _finite_vector(value: Any, length: int, name: str) -> tuple[float, ...]:
@@ -107,6 +119,9 @@ def parse_client_message(payload: Mapping[str, Any], received_ns: int) -> Client
 
     if message_type == "telemetry":
         return _parse_client_telemetry(payload, session_id, received_ns)
+
+    if message_type == "record":
+        return _parse_record_command(payload, session_id)
 
     if message_type != "pose":
         raise ProtocolError(f"unsupported message type: {message_type!r}")
@@ -212,6 +227,40 @@ def _parse_client_telemetry(
         last_rtt_ms=last_rtt_ms,
         max_rtt_ms=max_rtt_ms,
         received_ns=received_ns,
+    )
+
+
+def _parse_record_command(
+    payload: Mapping[str, Any],
+    session_id: str,
+) -> RecordCommand:
+    action = payload.get("action")
+    if action not in {"start", "stop", "discard", "set_task"}:
+        raise ProtocolError(f"unsupported record action: {action!r}")
+    task = payload.get("task")
+    if task is not None:
+        if not isinstance(task, str):
+            raise ProtocolError("task must be a string")
+        task = task.strip()
+        if len(task) > MAX_TASK_CHARS:
+            raise ProtocolError(f"task must be at most {MAX_TASK_CHARS} characters")
+        task = task or None
+    outcome = payload.get("outcome")
+    if action == "stop":
+        if outcome not in {"success", "failure"}:
+            raise ProtocolError("stop outcome must be success or failure")
+    elif outcome is not None:
+        raise ProtocolError("outcome is only valid for stop")
+    if action == "set_task":
+        if task is None:
+            raise ProtocolError("set_task requires a non-empty task")
+    elif action != "start" and task is not None:
+        raise ProtocolError("task is only valid for start and set_task")
+    return RecordCommand(
+        session_id=session_id,
+        action=action,
+        task=task,
+        outcome=outcome,
     )
 
 

@@ -4,8 +4,14 @@ import time
 from dataclasses import dataclass
 
 from teleop.control_math import TcpPose
-from teleop.robot.client import GripperMotionState, RobotClientError
+from teleop.robot.client import (
+    GripperMotionState,
+    RobotClientError,
+    RobotStateSnapshot,
+)
 
+
+FAKE_JOINTS = (0.0, -90.0, 90.0, -90.0, 90.0, 0.0)
 
 @dataclass(frozen=True)
 class FakeRobotBehavior:
@@ -26,6 +32,7 @@ class FakeRobotClient:
         self.gripper_active = False
         self.gripper_position = 0
         self._gripper_done_ns = 0
+        self._frame_cnt = 0
 
     def _before(self, operation: str) -> None:
         if self.behavior.hang_on == operation:
@@ -48,7 +55,19 @@ class FakeRobotClient:
 
     def get_current_joints(self) -> tuple[float, float, float, float, float, float]:
         self._before("get_current_joints")
-        return (0.0, -90.0, 90.0, -90.0, 90.0, 0.0)
+        return FAKE_JOINTS
+
+    def get_state_snapshot(self) -> RobotStateSnapshot | None:
+        self._before("get_state_snapshot")
+        self._frame_cnt = (self._frame_cnt + 1) % 256
+        return RobotStateSnapshot(
+            joint_pos_deg=FAKE_JOINTS,
+            joint_vel_deg_s=(0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+            tcp=self.current_tcp,
+            gripper_position=float(self.gripper_position),
+            frame_cnt=self._frame_cnt,
+            robot_time_ms=time.monotonic_ns() // 1_000_000,
+        )
 
     def servo_start(self) -> None:
         self._before("servo_start")

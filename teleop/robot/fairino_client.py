@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import importlib
 import inspect
 import logging
@@ -11,7 +12,11 @@ from typing import Any
 
 from teleop.config import TeleopConfig
 from teleop.control_math import TcpPose
-from teleop.robot.client import GripperMotionState, RobotClientError
+from teleop.robot.client import (
+    GripperMotionState,
+    RobotClientError,
+    RobotStateSnapshot,
+)
 
 
 log = logging.getLogger(__name__)
@@ -232,6 +237,41 @@ class FairinoRobotClient:
             )
         joints = tuple(float(value) for value in result[1])
         return (joints[0], joints[1], joints[2], joints[3], joints[4], joints[5])
+
+    def get_state_snapshot(self) -> RobotStateSnapshot | None:
+        """Copy the SDK's controller-pushed state cache without any RPC.
+
+        SDK 2.2.x fills ``robot_state_pkg`` from the 20005 CNDE stream (8 ms by
+        default). Older SDKs keep the bare class until the first packet, so a
+        non-instance means no state has arrived yet. Fields are updated one by
+        one by the SDK thread, so joints and TCP may come from adjacent packets.
+        """
+        if self._robot is None:
+            return None
+        pkg = getattr(self._robot, "robot_state_pkg", None)
+        if not isinstance(pkg, ctypes.Structure):
+            return None
+        try:
+            joints = tuple(float(value) for value in pkg.jt_cur_pos)
+            velocities = tuple(float(value) for value in pkg.actual_qd)
+            tcp = tuple(float(value) for value in pkg.tl_cur_pos)
+            robot_time_ms = (
+                ((int(pkg.hour) * 60 + int(pkg.minute)) * 60 + int(pkg.second))
+                * 1000
+                + int(pkg.millisecond)
+            )
+            return RobotStateSnapshot(
+                joint_pos_deg=joints,  # type: ignore[arg-type]
+                joint_vel_deg_s=velocities,  # type: ignore[arg-type]
+                tcp=tcp,  # type: ignore[arg-type]
+                gripper_position=float(pkg.gripper_position),
+                frame_cnt=int(pkg.frame_cnt),
+                robot_time_ms=robot_time_ms,
+            )
+        except AttributeError as exc:
+            raise RobotClientError(
+                "robot_state_pkg", None, f"unexpected SDK state layout: {exc}"
+            ) from exc
 
     def servo_start(self) -> None:
         self._call_zero("ServoMoveStart")

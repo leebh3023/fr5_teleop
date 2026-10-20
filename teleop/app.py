@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aiohttp import WSMsgType, web
+from aiohttp import WSCloseCode, WSMsgType, web
 
 from teleop.config import TeleopConfig
 from teleop.controller_lease import ControllerLease
@@ -20,7 +20,13 @@ from teleop.protocol import (
     ControlEvent,
     PoseMessage,
     ProtocolError,
+    RecordCommand,
     parse_client_message,
+)
+from teleop.recording.recorder import (
+    EpisodeOutcome,
+    RecorderHandle,
+    RecorderUnavailable,
 )
 from teleop.robot.state import ControlCommand, WorkerState, WorkerStatus
 from teleop.robot.supervisor import RobotSupervisor
@@ -121,8 +127,23 @@ class TeleopRuntime:
         self._client_telemetry: dict[str, ClientTelemetry] = {}
         self._telemetry_last_log_ns: dict[str, int] = {}
         self._telemetry_last_warning_ns: dict[str, int] = {}
+        self.recorder: RecorderHandle | None = (
+            RecorderHandle(
+                config,
+                hands=self.supervisor.hands,
+                robot_kind=self.supervisor.robot_kind,
+            )
+            if config.recording.enabled
+            else None
+        )
+        self.recording_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        if self.recorder is not None:
+            self.recorder.start()
+            self.recording_task = asyncio.create_task(
+                self._recording_loop(), name="teleop-recording-pump"
+            )
         self.supervisor.start()
         self.status_task = asyncio.create_task(
             self._status_loop(), name="teleop-status-publisher"
@@ -134,8 +155,48 @@ class TeleopRuntime:
             self.status_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self.status_task
+        # The recording pump keeps draining while workers shut down so the
+        # tail of an open episode is captured.
         report = await asyncio.to_thread(self.supervisor.shutdown_by_hand)
         log.info("robot worker shutdown: %s", report)
+        if self.recorder is not None:
+            if self.recording_task is not None:
+                self.recording_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self.recording_task
+            self._pump_recording()
+            await asyncio.to_thread(self.recorder.shutdown)
+
+    def _pump_recording(self) -> None:
+        assert self.recorder is not None
+        for hand, batches in self.supervisor.drain_samples_by_hand().items():
+            self.recorder.submit_samples(hand, batches)
+        self.recorder.drain_status()
+
+    async def _recording_loop(self) -> None:
+        while True:
+            self._pump_recording()
+            await asyncio.sleep(0.02)
+
+    def handle_record_command(self, command: RecordCommand) -> None:
+        if self.recorder is None:
+            raise RecorderUnavailable("recording is disabled in config")
+        log.info(
+            "record command session=%s action=%s outcome=%s task=%r",
+            command.session_id[:8],
+            command.action,
+            command.outcome,
+            command.task,
+        )
+        if command.action == "start":
+            self.recorder.start_episode(command.task)
+        elif command.action == "stop":
+            self.recorder.stop_episode(EpisodeOutcome(command.outcome))
+        elif command.action == "set_task":
+            assert command.task is not None
+            self.recorder.set_task(command.task)
+        else:
+            self.recorder.discard_episode()
 
     async def register(self, session_id: str, ws: web.WebSocketResponse) -> None:
         self.clients[session_id] = ws
@@ -451,6 +512,11 @@ class TeleopRuntime:
                     "hung": aggregate_health.hung,
                 },
                 "arms": arm_payloads,
+                "recording": (
+                    self.recorder.status_payload()
+                    if self.recorder is not None
+                    else None
+                ),
             }
         )
         if combined_fault is not None:
@@ -675,8 +741,24 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
 async def _handle_client_message(
     runtime: TeleopRuntime,
     ws: web.WebSocketResponse,
-    message: PoseMessage | ControlEvent | ClientTelemetry,
+    message: PoseMessage | ControlEvent | ClientTelemetry | RecordCommand,
 ) -> None:
+    if isinstance(message, RecordCommand):
+        # Any connected session (Quest or operator monitor) may control
+        # recording; it never affects the controller lease or robot motion.
+        try:
+            runtime.handle_record_command(message)
+        except RecorderUnavailable as exc:
+            await ws.send_json(
+                {
+                    "version": PROTOCOL_VERSION,
+                    "type": "error",
+                    "code": "recording_unavailable",
+                    "message": str(exc),
+                }
+            )
+        return
+
     if isinstance(message, ClientTelemetry):
         if not runtime.lease.owns(message.session_id):
             raise ProtocolError(
@@ -743,6 +825,20 @@ async def _handle_client_message(
     runtime.supervisor.publish_pose(message)
 
 
+async def _close_websockets(app: web.Application) -> None:
+    # aiohttp waits (up to shutdown_timeout) for open handlers before running
+    # cleanup_ctx, so an open Quest/monitor socket would delay stopping the
+    # robot worker and finalizing the recording by tens of seconds.
+    runtime: TeleopRuntime = app[RUNTIME_KEY]
+    await asyncio.gather(
+        *(
+            ws.close(code=WSCloseCode.GOING_AWAY, message=b"server shutdown")
+            for ws in tuple(runtime.clients.values())
+        ),
+        return_exceptions=True,
+    )
+
+
 async def _application_context(app: web.Application):
     runtime: TeleopRuntime = app[RUNTIME_KEY]
     await runtime.start()
@@ -757,6 +853,7 @@ def create_app(config: TeleopConfig) -> web.Application:
     app = web.Application(client_max_size=config.max_ws_message_bytes)
     app[RUNTIME_KEY] = TeleopRuntime(config)
     app.cleanup_ctx.append(_application_context)
+    app.on_shutdown.append(_close_websockets)
     app.router.add_get("/", index_handler)
     app.router.add_get("/monitor", monitor_handler)
     app.router.add_get("/health/live", live_handler)

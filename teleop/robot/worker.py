@@ -10,7 +10,8 @@ from typing import Any
 from teleop.config import TeleopConfig
 from teleop.control_math import MotionPlanner, TcpPose
 from teleop.ipc import LatestPoseMailbox, SharedPose
-from teleop.robot.client import RobotClient
+from teleop.recording.schema import build_sample
+from teleop.robot.client import RobotClient, RobotClientError, RobotStateSnapshot
 from teleop.robot.diagnostics import WorkerDiagnostics
 from teleop.robot.fake_client import FakeRobotBehavior, FakeRobotClient
 from teleop.robot.fairino_client import FairinoRobotClient
@@ -58,6 +59,7 @@ class RobotWorkerRuntime:
         WorkerState.ACTIVE,
         WorkerState.STOPPING,
     }
+    SAMPLE_BATCH_TICKS = 10
 
     def __init__(
         self,
@@ -66,6 +68,7 @@ class RobotWorkerRuntime:
         control_receive: Any,
         status_queue: Any,
         heartbeat_ns: Any,
+        sample_queue: Any = None,
     ) -> None:
         self.spec = spec
         self.config = spec.config
@@ -73,6 +76,16 @@ class RobotWorkerRuntime:
         self.control_receive = control_receive
         self.status_queue = status_queue
         self.heartbeat_ns = heartbeat_ns
+        self.sample_queue = sample_queue
+        if self.sample_queue is not None:
+            # Recording must never delay worker exit (and so ServoMoveEnd /
+            # CloseRPC ordering) if the parent stops draining samples.
+            self.sample_queue.cancel_join_thread()
+        self.sample_buffer: list[tuple[Any, ...]] = []
+        self.sample_dropped_batches = 0
+        self._snapshot_error_logged = False
+        self.clutch_id = 0
+        self.tick_cmd_tcp: TcpPose | None = None
 
         self.client = _make_client(spec)
         self.planner = MotionPlanner(self.config)
@@ -153,6 +166,10 @@ class RobotWorkerRuntime:
                 now_ns = time.monotonic_ns()
                 self.heartbeat_ns.value = now_ns
                 fresh = self._pose_is_fresh(pose, now_ns)
+                # Observation is read before this tick's command, matching how
+                # a policy observes and then acts.
+                snapshot_ns, snapshot = self._read_state_snapshot()
+                self.tick_cmd_tcp = None
 
                 self._handle_session_release(commands, now_ns)
                 self._handle_trigger_events(
@@ -172,6 +189,8 @@ class RobotWorkerRuntime:
                     grip_press_requested,
                     commands.fault_reset,
                 )
+                if self.sample_queue is not None:
+                    self._record_sample(snapshot_ns, snapshot, pose, fresh)
 
                 status_now_ns = time.monotonic_ns()
                 if status_now_ns - self.last_status_ns >= self.status_period_ns:
@@ -397,6 +416,7 @@ class RobotWorkerRuntime:
             self.planner.engage(pose.position_m, pose.orientation_xyzw, self.robot_tcp)
             self._timed_call(self.client.servo_start)
             self.servo_started = True
+            self.clutch_id += 1
             self.counters.servo_start_count += 1
             self.diagnostics.record_servo_transition(
                 time.monotonic_ns(),
@@ -461,6 +481,7 @@ class RobotWorkerRuntime:
                 angular_step_limit_deg=angular_step_limit_deg,
             )
             self._timed_call(self.client.servo_cart, self.robot_tcp)
+            self.tick_cmd_tcp = self.robot_tcp
             self.last_servo_command_ns = now_ns
             self.counters.servo_cart_count += 1
         except Exception as exc:
@@ -705,6 +726,80 @@ class RobotWorkerRuntime:
         except queue.Full:
             pass
 
+    def _read_state_snapshot(self) -> tuple[int, RobotStateSnapshot | None]:
+        if self.sample_queue is None:
+            return 0, None
+        try:
+            snapshot = self.client.get_state_snapshot()
+        except RobotClientError as exc:
+            # Recording-only data: a missing observation is stored as NaN and
+            # never changes the control state machine.
+            if not self._snapshot_error_logged:
+                log.warning(
+                    "robot state snapshot unavailable generation=%d error=%s",
+                    self.spec.generation,
+                    exc,
+                )
+                self._snapshot_error_logged = True
+            snapshot = None
+        return time.monotonic_ns(), snapshot
+
+    def _record_sample(
+        self,
+        snapshot_ns: int,
+        snapshot: RobotStateSnapshot | None,
+        pose: SharedPose,
+        fresh: bool,
+    ) -> None:
+        vr_valid = pose.valid and pose.generation == self.spec.generation
+        self.sample_buffer.append(
+            build_sample(
+                t_ns=snapshot_ns,
+                tick=self.tick,
+                generation=self.spec.generation,
+                state=self.state,
+                fresh=fresh,
+                servo_active=self.servo_started,
+                clutch_id=self.clutch_id,
+                cmd_tcp=self.tick_cmd_tcp,
+                gripper_target=float(
+                    self.pending_gripper_position
+                    if self.pending_gripper_position is not None
+                    else self.gripper_position
+                ),
+                gripper_busy=self.state == WorkerState.GRIPPER_ACTION,
+                vr_valid=vr_valid,
+                vr_seq=pose.seq,
+                vr_received_ns=pose.received_ns,
+                vr_position_m=pose.position_m,
+                vr_orientation_xyzw=pose.orientation_xyzw,
+                grip=pose.grip and vr_valid,
+                trigger=pose.trigger and vr_valid,
+                joint_pos_deg=snapshot.joint_pos_deg if snapshot else None,
+                joint_vel_deg_s=snapshot.joint_vel_deg_s if snapshot else None,
+                tcp=snapshot.tcp if snapshot else None,
+                gripper_position=snapshot.gripper_position if snapshot else None,
+                robot_frame_cnt=snapshot.frame_cnt if snapshot else -1,
+                robot_time_ms=snapshot.robot_time_ms if snapshot else -1,
+            )
+        )
+        if len(self.sample_buffer) >= self.SAMPLE_BATCH_TICKS:
+            self._flush_samples()
+
+    def _flush_samples(self) -> None:
+        if self.sample_queue is None or not self.sample_buffer:
+            return
+        batch = (
+            self.spec.generation,
+            self.sample_dropped_batches,
+            self.sample_buffer,
+        )
+        self.sample_buffer = []
+        try:
+            self.sample_queue.put_nowait(batch)
+        except queue.Full:
+            self.sample_dropped_batches += 1
+
     def _timed_call(self, operation: Any, *args: Any) -> Any:
         return self.diagnostics.timed_call(
             operation,
@@ -755,6 +850,7 @@ class RobotWorkerRuntime:
         now_ns = time.monotonic_ns()
         self.heartbeat_ns.value = now_ns
         self._publish_status(now_ns, self.reason)
+        self._flush_samples()
         try:
             self.control_receive.close()
         except OSError:
@@ -767,6 +863,7 @@ def run_robot_worker(
     control_receive: Any,
     status_queue: Any,
     heartbeat_ns: Any,
+    sample_queue: Any = None,
 ) -> None:
     # The parent aiohttp process owns terminal/service signals and converts
     # them into the ordered SHUTDOWN control command. Without this, Ctrl+C
@@ -786,4 +883,5 @@ def run_robot_worker(
         control_receive,
         status_queue,
         heartbeat_ns,
+        sample_queue,
     ).run()

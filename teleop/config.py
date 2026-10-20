@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 from math import isfinite
 from pathlib import Path
@@ -71,7 +72,7 @@ class GripperConfig:
 
 @dataclass(frozen=True)
 class OrientationConfig:
-    """Disabled by default. See AGENTS.md: the Fairino rx,ry,rz Euler
+    """Disabled by default. The Fairino rx,ry,rz Euler
     convention is not documented by the vendor SDK and is assumed here
     (fixed-angle XYZ) pending real-robot single-axis verification."""
 
@@ -98,6 +99,91 @@ class OrientationConfig:
             0.0 < self.max_deviation_deg <= 90.0
         ):
             raise ValueError("orientation.max_deviation_deg must be in (0, 90]")
+
+
+# RealSense D435i RGB stream modes. Depth is always captured at 640x480 and
+# aligned to the color stream.
+D435I_COLOR_RESOLUTIONS = frozenset(
+    {
+        (320, 180),
+        (320, 240),
+        (424, 240),
+        (640, 360),
+        (640, 480),
+        (848, 480),
+        (960, 540),
+        (1280, 720),
+        (1920, 1080),
+    }
+)
+CAMERA_SOURCES = frozenset({"realsense", "fake"})
+
+
+@dataclass(frozen=True)
+class CameraConfig:
+    """Wrist camera recorded alongside robot samples (RealSense D435i)."""
+
+    enabled: bool = False
+    # "fake" produces synthetic frames for dry-run tests without a camera.
+    source: str = "realsense"
+    name: str = "wrist"
+    serial: str | None = None
+    width: int = 640
+    height: int = 480
+    fps: int = 30
+    depth: bool = False
+
+    def validate(self) -> None:
+        if self.source not in CAMERA_SOURCES:
+            raise ValueError(
+                "recording.camera.source must be one of "
+                + ", ".join(sorted(CAMERA_SOURCES))
+            )
+        if not self.name or not all(
+            char.isascii() and (char.isalnum() or char == "_") for char in self.name
+        ):
+            raise ValueError("recording.camera.name must be ASCII letters, digits or _")
+        if self.fps not in {6, 15, 30, 60}:
+            raise ValueError("recording.camera.fps must be 6, 15, 30, or 60")
+        if (
+            self.source == "realsense"
+            and (self.width, self.height) not in D435I_COLOR_RESOLUTIONS
+        ):
+            raise ValueError(
+                f"recording.camera {self.width}x{self.height} is not a D435i "
+                "color resolution"
+            )
+        if self.width <= 0 or self.height <= 0 or self.width % 2 or self.height % 2:
+            raise ValueError("recording.camera width and height must be even")
+        if not self.enabled:
+            return
+        modules = ["av", "numpy"]
+        if self.source == "realsense":
+            modules.append("pyrealsense2")
+        missing = [name for name in modules if importlib.util.find_spec(name) is None]
+        if missing:
+            raise ValueError(
+                "recording.camera requires "
+                + ", ".join(missing)
+                + "; install requirements-camera.txt"
+            )
+
+
+@dataclass(frozen=True)
+class RecordingConfig:
+    """Raw demonstration recording. Never affects robot motion."""
+
+    enabled: bool = False
+    root_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "recordings")
+    camera: CameraConfig = field(default_factory=CameraConfig)
+
+    def validate(self) -> None:
+        if self.root_dir.exists() and not self.root_dir.is_dir():
+            raise ValueError(
+                f"recording.root_dir is not a directory: {self.root_dir}"
+            )
+        if self.enabled:
+            self.camera.validate()
 
 
 @dataclass(frozen=True)
@@ -130,7 +216,7 @@ class TeleopConfig:
     robot_ip: str | None = None
     arms: tuple[ArmConfig, ...] = ()
     sdk_path: Path = field(
-        default_factory=lambda: PROJECT_ROOT / "fairino-python-sdk-main" / "linux"
+        default_factory=lambda: PROJECT_ROOT / "fairino-python-sdk-2.2.8_robot_v3.9.8" / "linux"
     )
     web_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "web")
     tls_cert_path: Path | None = field(
@@ -154,6 +240,7 @@ class TeleopConfig:
     workspace: WorkspaceBounds = field(default_factory=WorkspaceBounds)
     gripper: GripperConfig = field(default_factory=GripperConfig)
     orientation: OrientationConfig = field(default_factory=OrientationConfig)
+    recording: RecordingConfig = field(default_factory=RecordingConfig)
     exaxis_default: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
     max_ws_message_bytes: int = 4096
     allowed_origins: tuple[str, ...] = ()
@@ -246,6 +333,7 @@ class TeleopConfig:
         self.workspace.validate()
         self.gripper.validate()
         self.orientation.validate()
+        self.recording.validate()
 
     @classmethod
     def from_yaml(cls, path: Path, *, validate: bool = True) -> TeleopConfig:
@@ -269,6 +357,7 @@ class TeleopConfig:
                 "motion",
                 "gripper",
                 "orientation",
+                "recording",
             },
             "config",
         )
@@ -281,8 +370,24 @@ class TeleopConfig:
         workspace = _section(motion, "workspace")
         gripper = _section(root, "gripper")
         orientation = _section(root, "orientation")
+        recording = _section(root, "recording")
+        camera = _section(recording, "camera")
 
         _reject_unknown(runtime, {"dry_run", "log_level", "status_hz"}, "runtime")
+        _reject_unknown(recording, {"enabled", "root_dir", "camera"}, "recording")
+        _reject_unknown(
+            camera,
+            {"enabled", "source", "name", "serial", "width", "height", "fps", "depth"},
+            "recording.camera",
+        )
+        camera_serial = camera.get("serial")
+        if camera_serial is not None:
+            # YAML reads an unquoted serial such as 123456789012 as an int.
+            if isinstance(camera_serial, bool) or not isinstance(
+                camera_serial, (str, int)
+            ):
+                raise ValueError("recording.camera.serial must be a string")
+            camera_serial = _string(str(camera_serial), "recording.camera.serial")
         _reject_unknown(
             server,
             {"host", "port", "web_dir", "max_ws_message_bytes", "allowed_origins"},
@@ -541,6 +646,48 @@ class TeleopConfig:
                         "max_deviation_deg", defaults.orientation.max_deviation_deg
                     ),
                     "orientation.max_deviation_deg",
+                ),
+            ),
+            recording=RecordingConfig(
+                enabled=_boolean(
+                    recording.get("enabled", defaults.recording.enabled),
+                    "recording.enabled",
+                ),
+                root_dir=_path(
+                    recording.get("root_dir", defaults.recording.root_dir),
+                    "recording.root_dir",
+                    base_dir,
+                ),
+                camera=CameraConfig(
+                    enabled=_boolean(
+                        camera.get("enabled", defaults.recording.camera.enabled),
+                        "recording.camera.enabled",
+                    ),
+                    source=_string(
+                        camera.get("source", defaults.recording.camera.source),
+                        "recording.camera.source",
+                    ),
+                    name=_string(
+                        camera.get("name", defaults.recording.camera.name),
+                        "recording.camera.name",
+                    ),
+                    serial=camera_serial,
+                    width=_integer(
+                        camera.get("width", defaults.recording.camera.width),
+                        "recording.camera.width",
+                    ),
+                    height=_integer(
+                        camera.get("height", defaults.recording.camera.height),
+                        "recording.camera.height",
+                    ),
+                    fps=_integer(
+                        camera.get("fps", defaults.recording.camera.fps),
+                        "recording.camera.fps",
+                    ),
+                    depth=_boolean(
+                        camera.get("depth", defaults.recording.camera.depth),
+                        "recording.camera.depth",
+                    ),
                 ),
             ),
             exaxis_default=_four_numbers(
