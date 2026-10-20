@@ -1,5 +1,242 @@
 # VR Teleop Bridge for Fairino FR5
 
+## Docker
+
+배포용 이미지는 `ghcr.io/leebh3023/fr5_teleop`이다. Python 3.10, 고정된
+의존성(`requirements-lock.txt`, `requirements-camera.txt`), SDK 2.2.8의
+`Robot.py`가 들어 있어 호스트 Python 버전과 무관하게 동작한다. `v*` 태그를
+push하면 GitHub Actions가 컨테이너 안에서 테스트를 통과시킨 뒤 이미지를 올린다.
+
+설계상 고정된 실행 조건(`compose.yaml`):
+
+- `network_mode: host`: 로봇 TCP 20003·20005, UDP 20007과 Quest 8443을 NAT 없이 쓴다.
+- `init: true`, `stop_grace_period: 15s`: spawn된 worker/recorder 프로세스를
+  정리하고, 녹화 종료(약 12초)가 SIGKILL로 잘리지 않게 한다.
+- `restart: "no"`: 하드웨어 모드는 자동으로 다시 시작하지 않는다.
+- 컨테이너는 UID/GID 1000으로 실행된다. 호스트 계정도 `id -u`가 1000이어야
+  `recordings/` 파일 소유권과 `certs/key.pem`(600) 읽기가 맞는다.
+
+### 현장 PC 설치
+
+현장 PC에 필요한 것은 두 가지다.
+
+| 무엇            | 내용                                                                                  | 가져오는 방법                                                                          |
+| --------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| 프로그램 본체   | Python 3.10, 의존성, `teleop/` 코드, `web/` 화면, SDK                             | Docker 이미지. `docker compose pull`로 GHCR에서 받는다. 현장 PC에서 빌드하지 않는다. |
+| 실행용 파일 4개 | `compose.yaml`, `config.yaml`, `config_bimanual.yaml`, `scripts/make_cert.sh` | 아래 **방법 A(git clone)** 또는 **방법 B(파일 4개만 복사)**                |
+
+방법 A와 B는 실행용 파일 4개를 가져오는 방법만 다르고 결과는 같다. 현장 PC에
+git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에는 어느 방법이든
+인터넷이 필요하다.
+
+**config와 이미지는 같은 버전을 쓴다.** config는 알 수 없는 키를 거부하므로,
+새 버전의 `config.yaml`을 옛 이미지로 실행하면 시작 단계에서 실패할 수 있다.
+아래 예시는 모두 `v0.3.0`(이미지 태그 `0.3.0`) 기준이다.
+
+#### 공통 준비 (최초 1회)
+
+1. Docker Engine을 설치한다(docker.com의 Ubuntu apt 저장소).
+
+   ```bash
+   sudo apt-get update
+   sudo apt-get install -y ca-certificates curl
+   sudo install -m 0755 -d /etc/apt/keyrings
+   sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+   https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+   sudo apt-get update
+   sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+   ```
+2. 현재 계정을 docker 그룹에 넣고 **로그아웃 후 다시 로그인**한다. 그룹은 새
+   로그인부터 적용되므로, 이미 열려 있던 터미널(VS Code 포함)에서는
+   `permission denied`가 난다.
+
+   ```bash
+   sudo usermod -aG docker "$USER"
+   # 다시 로그인한 뒤 확인
+   docker run --rm hello-world
+   id -u        # 1000이어야 한다 (컨테이너 실행 UID와 같아야 함)
+   ```
+3. 이미지는 public이므로 `docker login`은 필요 없다. 패키지를 private으로 바꾼
+   경우에만 `read:packages` 권한 PAT로 `docker login ghcr.io -u leebh3023`을 한다.
+
+#### 방법 A: git clone (권장)
+
+저장소 전체(약 1.4 MB)를 받으면 실행용 파일 4개가 제자리에 들어 있다. 이미지와
+같은 버전 태그로 맞춘다.
+
+```bash
+sudo apt-get install -y git          # git이 없을 때만
+git clone https://github.com/leebh3023/fr5_teleop.git ~/fr5_teleop
+cd ~/fr5_teleop
+git checkout v0.3.0                  # 이미지 태그 0.3.0과 맞춤
+```
+
+- 저장소에 `Dockerfile`도 있지만 현장에서는 쓰지 않는다. 이미지는 아래
+  `docker compose pull`로 받는다.
+- 현장에서 고친 `config.yaml`은 `git status`에 수정됨으로 보인다. 정상이다.
+  `.env`, `certs/*.pem`, `recordings/`는 git이 무시한다.
+
+#### 방법 B: 파일 4개만 복사
+
+git이 없거나 저장소 전체를 두고 싶지 않을 때 쓴다. 디렉터리 구조만 같으면 어떤
+방법으로 가져와도 된다.
+
+```bash
+mkdir -p ~/fr5_teleop/scripts
+cd ~/fr5_teleop
+```
+
+**B-1. GitHub에서 직접 받기 (현장 PC에 인터넷이 있을 때)**
+
+```bash
+V=v0.3.0
+for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh; do
+    curl -fsSL -o "$f" "https://raw.githubusercontent.com/leebh3023/fr5_teleop/$V/$f"
+done
+```
+
+**B-2. 개발 PC에서 복사 (scp 또는 USB)**
+
+개발 PC의 저장소에서 같은 버전(`git checkout v0.3.0`)으로 맞춘 뒤 복사한다.
+
+```bash
+# 개발 PC에서 실행
+scp compose.yaml config.yaml config_bimanual.yaml user@<현장PC>:~/fr5_teleop/
+scp scripts/make_cert.sh user@<현장PC>:~/fr5_teleop/scripts/
+```
+
+USB로 옮길 때도 `make_cert.sh`는 `scripts/` 아래에 둔다. 브라우저 다운로드나
+USB 복사로 실행 권한이 빠질 수 있으므로 항상 `bash scripts/make_cert.sh`로
+실행한다.
+
+#### 공통 마무리 (방법 A, B 모두)
+
+`~/fr5_teleop`에서 실행한다.
+
+1. 녹화 폴더를 만든다. 없으면 Docker가 root 소유로 만들어 컨테이너가 쓸 수 없다.
+
+   ```bash
+   mkdir -p recordings
+   ```
+2. 인증서를 만든다. `certs/cert.pem`, `certs/key.pem`이 생긴다.
+
+   ```bash
+   ip -4 -br addr                                   # Quest가 접속할 주소 확인
+   TELEOP_HOST_IP=192.168.1.50 bash scripts/make_cert.sh
+   ```
+
+   - `TELEOP_HOST_IP`는 **Quest가 접속할 PC 주소**다. 로봇 LAN
+     (`192.168.58.x`) 주소가 아니다. 생략하면 `hostname -I`의 첫 주소를 쓰므로,
+     네트워크가 여러 개인 현장 PC에서는 항상 지정한다.
+   - 이미 인증서가 있으면 새로 만들지 않고, 주소가 다를 때 경고만 한다.
+     PC 주소가 바뀌었거나 1년 유효기간이 지나면 `certs/*.pem`을 지우고 다시
+     실행한다. 컨테이너는 다음 실행부터 새 인증서를 쓴다.
+   - 자체 서명 인증서이므로 Quest 브라우저에서 처음 접속할 때 나오는 경고를
+     승인해야 WebXR이 동작한다. 인증서를 다시 만들면 다시 승인한다.
+3. 이미지 버전을 고정하고 받는다.
+
+   ```bash
+   echo "TELEOP_TAG=0.3.0" > .env
+   docker compose pull
+   ```
+4. 현장 로봇에 맞게 `config.yaml`을 고친다(`robot.ip`, `motion.workspace`,
+   `position_scale` 등). 양팔은 `config_bimanual.yaml`을 고친다.
+5. dry-run으로 확인한다.
+
+   ```bash
+   docker compose run --rm teleop
+   ```
+
+   - 로그에 `starting teleop mode=DRY-RUN url=https://0.0.0.0:8443`이 나온다.
+   - 다른 터미널의 `docker ps`에서 약 20초 뒤 `(healthy)`가 보인다.
+   - Quest 브라우저에서 `https://<PC주소>:8443`, PC 브라우저에서
+     `https://<PC주소>:8443/monitor`가 열린다.
+   - Ctrl+C로 종료한다.
+
+설치가 끝난 디렉터리는 다음과 같다(방법 A는 저장소의 나머지 파일도 함께 있다).
+
+```text
+~/fr5_teleop/
+├── compose.yaml
+├── config.yaml            # 현장에서 수정
+├── config_bimanual.yaml   # 현장에서 수정
+├── .env                   # TELEOP_TAG=0.3.0
+├── scripts/make_cert.sh
+├── certs/cert.pem, key.pem
+└── recordings/            # 녹화 결과 (호스트에 남음)
+```
+
+### 실행
+
+세션마다 직접 실행하고 Ctrl+C로 종료한다. 첫 Ctrl+C(또는 `docker stop`의
+SIGTERM)에 worker 종료와 녹화 마무리를 순서대로 진행하며, 그 뒤의 Ctrl+C는
+무시한다. 종료가 멈춘 경우에만 `docker kill`을 쓴다.
+
+```bash
+docker compose run --rm teleop                                   # dry-run
+docker compose run --rm teleop --confirm-hardware                # 단일 로봇
+docker compose run --rm teleop --config /app/config_bimanual.yaml --confirm-hardware
+```
+
+config 파일은 `/app`에 읽기 전용으로 마운트되므로 workspace, scale 등은 호스트의
+`config.yaml`을 고친 뒤 다시 실행하면 된다. config 안의 상대 경로(`web`,
+`certs/...`, `recordings`, `sdk_path`)는 모두 `/app` 기준으로 해석된다.
+
+### 버전 올리기
+
+이미지와 실행용 파일을 **같은 버전으로 함께** 올린다. 현장에서 고친 `config.yaml`
+내용을 잃지 않도록 주의한다.
+
+**방법 A (git clone)**
+
+```bash
+cd ~/fr5_teleop
+git stash                      # 현장에서 고친 config를 잠시 치움
+git fetch --tags
+git checkout v0.4.0            # 새 버전
+git stash pop                  # 고친 config를 다시 적용 (충돌 시 직접 병합)
+echo "TELEOP_TAG=0.4.0" > .env
+docker compose pull
+```
+
+**방법 B (파일 복사)**
+
+새 `config.yaml`이 현장 수정본을 덮어쓰지 않도록 백업한 뒤 비교한다.
+
+```bash
+cd ~/fr5_teleop
+cp config.yaml config.yaml.bak
+cp config_bimanual.yaml config_bimanual.yaml.bak
+V=v0.4.0
+for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh; do
+    curl -fsSL -o "$f" "https://raw.githubusercontent.com/leebh3023/fr5_teleop/$V/$f"
+done
+diff config.yaml.bak config.yaml       # 현장 수정값을 새 파일에 다시 반영
+echo "TELEOP_TAG=0.4.0" > .env
+docker compose pull
+```
+
+`.env`의 `TELEOP_TAG`를 생략하면 `latest`를 쓴다. 현장에서는 검증한 버전을
+고정한다. 문제가 생기면 이전 태그(`git checkout v0.3.0`이나 이전 파일, 그리고
+`TELEOP_TAG=0.3.0`)로 되돌린다.
+
+### 개발 PC에서 빌드와 검증
+
+```bash
+docker build --target test .        # 컨테이너 안에서 pytest + 서버 smoke
+docker compose build                # 런타임 이미지 빌드
+docker compose run --rm teleop      # dry-run 실행
+```
+
+릴리스: `teleop/__init__.py`의 `__version__`을 올리고 같은 이름의 태그
+(`v0.3.0`)를 push한다.
+
+손목 카메라(RealSense)를 컨테이너에서 쓰는 설정은 아직 포함하지 않았다.
+카메라 의존성은 이미지에 들어 있지만 USB 장치 전달과 호스트 udev 규칙은 다음
+단계에서 추가한다.
+
 ## Architecture
 
 ```text
@@ -13,28 +250,6 @@ FR5 controller
 ```
 
 Fairino SDK는 동기 호출과 내부 network thread를 사용하므로 별도 process에 격리한다. 기본 실행은 실제 robot에 연결하지 않는 fake dry-run이다.
-
-## Setup
-
-```bash
-./setup.sh
-```
-
-PC에 network interface가 여러 개이면 Quest가 접근할 주소를 명시한다.
-
-```bash
-TELEOP_HOST_IP=192.168.1.50 ./setup.sh
-```
-
-수동 설치:
-
-```bash
-python3 -m venv .venv-linux
-source .venv-linux/bin/activate
-python -m pip install -r requirements-dev.txt
-python -m pip install --no-deps -e .
-python -m pytest
-```
 
 ## Dry-run
 
@@ -255,92 +470,3 @@ raw episode는 `lerobot` 환경에서 LeRobotDataset v3(30 Hz)로 변환한다.
 state/action은 TCP 위치(m) + 회전 6D + 그리퍼(0~1)이고, 손목 카메라 영상과
 task가 함께 들어간다. 옵션과 정렬 원리는 `docs/record.md` 참고.
 
-## Docker
-
-배포용 이미지는 `ghcr.io/leebh3023/fr5_teleop`이다. Python 3.10, 고정된
-의존성(`requirements-lock.txt`, `requirements-camera.txt`), SDK 2.2.8의
-`Robot.py`가 들어 있어 호스트 Python 버전과 무관하게 동작한다. `v*` 태그를
-push하면 GitHub Actions가 컨테이너 안에서 테스트를 통과시킨 뒤 이미지를 올린다.
-
-설계상 고정된 실행 조건(`compose.yaml`):
-
-- `network_mode: host`: 로봇 TCP 20003·20005, UDP 20007과 Quest 8443을 NAT 없이 쓴다.
-- `init: true`, `stop_grace_period: 15s`: spawn된 worker/recorder 프로세스를
-  정리하고, 녹화 종료(약 12초)가 SIGKILL로 잘리지 않게 한다.
-- `restart: "no"`: 하드웨어 모드는 자동으로 다시 시작하지 않는다.
-- 컨테이너는 UID/GID 1000으로 실행된다. 호스트 계정도 `id -u`가 1000이어야
-  `recordings/` 파일 소유권과 `certs/key.pem`(600) 읽기가 맞는다.
-
-### 현장 PC 설치
-
-1. Docker Engine 설치(docker.com의 Ubuntu apt 저장소) 후
-   `sudo usermod -aG docker $USER`로 docker 그룹에 추가하고 다시 로그인한다.
-2. 이미지가 private이면 `read:packages` 권한 PAT로 로그인한다.
-
-   ```bash
-   docker login ghcr.io -u leebh3023
-   ```
-3. 실행 디렉터리를 만든다. 저장소의 `compose.yaml`, `config.yaml`,
-   `config_bimanual.yaml`, `scripts/make_cert.sh`만 있으면 된다.
-
-   ```bash
-   mkdir -p ~/fr5_teleop/scripts ~/fr5_teleop/recordings
-   cd ~/fr5_teleop
-   # compose.yaml, config.yaml, config_bimanual.yaml, scripts/make_cert.sh 복사
-   TELEOP_HOST_IP=192.168.1.50 bash scripts/make_cert.sh
-   docker compose pull
-   ```
-
-   `recordings/`는 미리 만들어야 한다. 없으면 Docker가 root 소유로 만들어
-   컨테이너가 쓸 수 없다.
-
-4. 인증서(`certs/cert.pem`, `certs/key.pem`)는 3번의 `make_cert.sh`가 만든다.
-   - `TELEOP_HOST_IP`는 **Quest가 접속할 PC 주소**다(`ip -4 -br addr`로 확인).
-     로봇 LAN(`192.168.58.x`) 주소가 아니다. 생략하면 `hostname -I`의 첫
-     주소를 쓰므로, 네트워크가 여러 개인 현장 PC에서는 항상 지정한다.
-   - 이미 인증서가 있으면 새로 만들지 않고, 주소가 다를 때 경고만 한다.
-     PC 주소가 바뀌었거나 1년 유효기간이 지나면 `certs/*.pem`을 지우고
-     다시 실행한다. 컨테이너는 다음 실행부터 새 인증서를 쓴다.
-   - 자체 서명 인증서이므로 Quest 브라우저에서 처음 접속할 때 나오는 경고를
-     승인해야 WebXR이 동작한다. 인증서를 다시 만들면 다시 승인한다.
-
-### 실행
-
-세션마다 직접 실행하고 Ctrl+C로 종료한다. 첫 Ctrl+C(또는 `docker stop`의
-SIGTERM)에 worker 종료와 녹화 마무리를 순서대로 진행하며, 그 뒤의 Ctrl+C는
-무시한다. 종료가 멈춘 경우에만 `docker kill`을 쓴다.
-
-```bash
-docker compose run --rm teleop                                   # dry-run
-docker compose run --rm teleop --confirm-hardware                # 단일 로봇
-docker compose run --rm teleop --config /app/config_bimanual.yaml --confirm-hardware
-```
-
-config 파일은 `/app`에 읽기 전용으로 마운트되므로 workspace, scale 등은 호스트의
-`config.yaml`을 고친 뒤 다시 실행하면 된다. config 안의 상대 경로(`web`,
-`certs/...`, `recordings`, `sdk_path`)는 모두 `/app` 기준으로 해석된다.
-
-### 이미지 갱신과 고정
-
-```bash
-TELEOP_TAG=0.3.0 docker compose pull          # 특정 버전 받기
-TELEOP_TAG=0.3.0 docker compose run --rm teleop --confirm-hardware
-```
-
-`TELEOP_TAG`를 생략하면 `latest`를 쓴다. 현장에서는 검증한 버전 태그를
-`.env`에 `TELEOP_TAG=0.3.0`으로 고정하는 것을 권장한다.
-
-### 개발 PC에서 빌드와 검증
-
-```bash
-docker build --target test .        # 컨테이너 안에서 pytest + 서버 smoke
-docker compose build                # 런타임 이미지 빌드
-docker compose run --rm teleop      # dry-run 실행
-```
-
-릴리스: `teleop/__init__.py`의 `__version__`을 올리고 같은 이름의 태그
-(`v0.3.0`)를 push한다.
-
-손목 카메라(RealSense)를 컨테이너에서 쓰는 설정은 아직 포함하지 않았다.
-카메라 의존성은 이미지에 들어 있지만 USB 장치 전달과 호스트 udev 규칙은 다음
-단계에서 추가한다.

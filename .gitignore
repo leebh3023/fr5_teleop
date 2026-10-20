@@ -19,6 +19,7 @@ venv/
 Thumbs.db
 
 # Runtime secrets and generated TLS files
+.env
 certs/*.pem
 !certs/.gitkeep
 *.key
