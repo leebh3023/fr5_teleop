@@ -377,6 +377,66 @@ def test_trigger_action_stops_servo_and_requires_new_grip_edge() -> None:
         supervisor.shutdown()
 
 
+def test_slow_gripper_call_counts_as_idle_overrun_not_missed_tick() -> None:
+    # MoveGripper is only sent after ServoMoveEnd, so a slow call blocks the
+    # loop while no ServoCart stream exists; it must not count as a miss.
+    config = replace(
+        make_config(),
+        pose_timeout_s=0.500,
+        gripper=GripperConfig(
+            enabled=True,
+            command_max_time_ms=100,
+            action_timeout_s=1.0,
+            poll_period_s=0.010,
+        ),
+    )
+    supervisor = RobotSupervisor(
+        config,
+        fake_behavior=FakeRobotBehavior(
+            gripper_motion_s=0.020, hang_on="move_gripper", hang_seconds=0.300
+        ),
+    )
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        time.sleep(0.03)
+        supervisor.publish_pose(pose(2, False, trigger=True))
+        supervisor.publish_pose(pose(3, False, trigger=False))
+        done = wait_for_status(
+            supervisor,
+            lambda status: status.counters.gripper_complete_count == 1,
+        )
+    finally:
+        supervisor.shutdown()
+    assert done.counters.missed_ticks == 0
+    # 300 ms at an 8 ms period is about 37 ticks.
+    assert done.counters.idle_overrun_ticks >= 30
+
+
+def test_slow_servo_cart_still_counts_missed_ticks() -> None:
+    supervisor = RobotSupervisor(
+        make_config(),
+        fake_behavior=FakeRobotBehavior(hang_on="servo_cart", hang_seconds=0.030),
+    )
+    supervisor.start()
+    try:
+        wait_for_state(supervisor, WorkerState.IDLE)
+        supervisor.publish_pose(pose(1, False))
+        time.sleep(0.03)
+        supervisor.publish_pose(pose(2, True))
+        wait_for_state(supervisor, WorkerState.ACTIVE)
+        for seq in range(3, 23):
+            supervisor.publish_pose(pose(seq, True))
+            time.sleep(0.02)
+        streaming = wait_for_status(
+            supervisor, lambda status: status.counters.missed_ticks > 0
+        )
+    finally:
+        supervisor.shutdown()
+    assert streaming.counters.missed_ticks > 0
+
+
 def test_trigger_edges_survive_pose_overwrite() -> None:
     config = replace(
         make_config(),

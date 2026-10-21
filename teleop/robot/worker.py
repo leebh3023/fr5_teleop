@@ -138,6 +138,7 @@ class RobotWorkerRuntime:
                 tick_started_ns = time.monotonic_ns()
                 self.heartbeat_ns.value = tick_started_ns
                 self.tick += 1
+                servo_streaming = self.servo_started
                 self.diagnostics.last_jitter_ms = (
                     tick_started_ns - next_deadline_ns
                 ) / 1_000_000
@@ -195,7 +196,9 @@ class RobotWorkerRuntime:
                 status_now_ns = time.monotonic_ns()
                 if status_now_ns - self.last_status_ns >= self.status_period_ns:
                     self._publish_status(status_now_ns)
-                next_deadline_ns = self._finish_tick(next_deadline_ns)
+                next_deadline_ns = self._finish_tick(
+                    next_deadline_ns, servo_streaming
+                )
         except BaseException as exc:
             self.fault = f"worker crashed: {exc}"
             self.state = WorkerState.FAULT
@@ -702,6 +705,7 @@ class RobotWorkerRuntime:
                 servo_cart_count=self.counters.servo_cart_count,
                 servo_end_count=self.counters.servo_end_count,
                 missed_ticks=self.counters.missed_ticks,
+                idle_overrun_ticks=self.counters.idle_overrun_ticks,
                 gripper_command_count=self.counters.gripper_command_count,
                 gripper_complete_count=self.counters.gripper_complete_count,
             ),
@@ -808,21 +812,25 @@ class RobotWorkerRuntime:
             tick=self.tick,
         )
 
-    def _finish_tick(self, next_deadline_ns: int) -> int:
+    def _finish_tick(self, next_deadline_ns: int, servo_streaming: bool) -> int:
         next_deadline_ns += self.period_ns
         after_work_ns = time.monotonic_ns()
         if after_work_ns > next_deadline_ns:
             behind_ns = after_work_ns - next_deadline_ns
             skipped = behind_ns // self.period_ns + 1
-            self.counters.missed_ticks += int(skipped)
-            self.diagnostics.record_deadline_miss(
-                after_work_ns,
-                skipped=int(skipped),
-                overrun_ms=behind_ns / 1_000_000,
-                counters=self.counters,
-                state=self.state,
-                tick=self.tick,
-            )
+            if servo_streaming:
+                self.counters.missed_ticks += int(skipped)
+                self.diagnostics.record_deadline_miss(
+                    after_work_ns,
+                    skipped=int(skipped),
+                    overrun_ms=behind_ns / 1_000_000,
+                    counters=self.counters,
+                    state=self.state,
+                    tick=self.tick,
+                )
+            else:
+                # Slow SDK calls are already logged by timed_call.
+                self.counters.idle_overrun_ticks += int(skipped)
             next_deadline_ns += int(skipped) * self.period_ns
         delay_ns = next_deadline_ns - time.monotonic_ns()
         if delay_ns > 0:

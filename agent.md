@@ -121,7 +121,7 @@ docker compose run --rm -T --entrypoint python teleop -c \
 | H3 | 위치 축 | 작업자가 grip을 잡고 손을 한 축씩 천천히 이동 (앞/뒤, 좌/우, 위/아래) | 로봇이 같은 방향으로 이동. 축마다 결과 기록 |
 | H4 | 회전 축 | roll, pitch, yaw를 한 축씩 천천히 | 같은 방향으로 회전. 축마다 결과 기록 |
 | H5 | dead-man | grip을 놓음 | 즉시 정지, 상태 `SLEEPING` 또는 `IDLE` |
-| H6 | 속도 | 보통 속도로 움직임 | 튀거나 끊기지 않음. `/health/ready`의 `missed_ticks`, `jitter_ms`, `servo_transition` 관련 ERROR 로그 유무 기록 |
+| H6 | 속도 | 보통 속도로 움직임 | 튀거나 끊기지 않음. `/health/ready`의 `missed_ticks`(servo 중 누락), `idle_overrun_ticks`(servo가 꺼진 상태의 그리퍼·servo 시작 대기, 정상), `jitter_ms`, `servo_transition` 관련 ERROR 로그 유무 기록 |
 | H7 | 종료 | grip을 놓은 상태에서 `docker stop fr5` | `state=STOPPING reason=shutdown` → `state=SHUTDOWN reason=worker_stopped`, `robot worker shutdown ... graceful=True`, `robot close failed` 없음. 종료 코드(`docker inspect -f '{{.State.ExitCode}}' fr5`) 0 |
 
 H7 후 `docker rm fr5`. 그리퍼는 config에서 꺼져 있으므로 검증하지 않는다.

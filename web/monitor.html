@@ -326,8 +326,11 @@ function updateStatus(data) {
   byId('worker').textContent =
     `gen ${worker.generation ?? '—'} / ${worker.alive ? 'alive' : 'down'}`;
   const counters = data.counters || {};
+  // missed = gaps while the servo streams; idle = blocking calls with the
+  // servo stopped (gripper, servo start), which are expected.
   byId('ticks').textContent =
-    `${data.tick ?? 0} / ${counters.missed_ticks ?? 0}`;
+    `${data.tick ?? 0} / ${counters.missed_ticks ?? 0}` +
+    ` (idle ${counters.idle_overrun_ticks ?? 0})`;
   byId('jitter').textContent = `${fmt(data.jitter_ms, 3)} ms`;
   severity(byId('jitter'), Math.abs(data.jitter_ms), 2, 8);
   byId('sdk').textContent = `${fmt(data.sdk_call_ms, 3)} ms`;
