@@ -85,9 +85,10 @@ orientation:
 recording:
   enabled: false
   root_dir: recordings
-  # Wrist RealSense D435i. Requires requirements-camera.txt and the
-  # librealsense udev rules. Recording refuses to start while it is enabled
-  # but not streaming. source: fake gives synthetic frames for dry-run tests.
+  # Wrist RealSense D435i. Requires requirements-camera.txt (in the Docker
+  # image) and the host udev rules (sudo bash scripts/install_realsense_udev.sh).
+  # Recording refuses to start while it is enabled but not streaming.
+  # source: fake gives synthetic frames for dry-run tests.
   camera:
     enabled: false
     source: realsense

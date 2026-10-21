@@ -23,7 +23,7 @@ push하면 GitHub Actions가 컨테이너 안에서 테스트를 통과시킨 �
 | 무엇            | 내용                                                                                  | 가져오는 방법                                                                          |
 | --------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | 프로그램 본체   | Python 3.10, 의존성, `teleop/` 코드, `web/` 화면, SDK                             | Docker 이미지. `docker compose pull`로 GHCR에서 받는다. 현장 PC에서 빌드하지 않는다. |
-| 실행용 파일 4개 | `compose.yaml`, `config.yaml`, `config_bimanual.yaml`, `scripts/make_cert.sh` | 아래 **방법 A(git clone)** 또는 **방법 B(파일 4개만 복사)**                |
+| 실행용 파일 4개 (+카메라용 2개) | `compose.yaml`, `config.yaml`, `config_bimanual.yaml`, `scripts/make_cert.sh`. 손목 카메라를 쓰면 `scripts/install_realsense_udev.sh`, `scripts/realsense/99-realsense-libusb.rules`도 필요하다. | 아래 **방법 A(git clone)** 또는 **방법 B(파일만 복사)** |
 
 방법 A와 B는 실행용 파일 4개를 가져오는 방법만 다르고 결과는 같다. 현장 PC에
 git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에는 어느 방법이든
@@ -31,7 +31,7 @@ git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에
 
 **config와 이미지는 같은 버전을 쓴다.** config는 알 수 없는 키를 거부하므로,
 새 버전의 `config.yaml`을 옛 이미지로 실행하면 시작 단계에서 실패할 수 있다.
-아래 예시는 모두 `v0.3.1`(이미지 태그 `0.3.1`) 기준이다.
+아래 예시는 모두 `v0.3.2`(이미지 태그 `0.3.2`) 기준이다.
 
 #### 공통 준비 (최초 1회)
 
@@ -70,7 +70,7 @@ git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에
 sudo apt-get install -y git          # git이 없을 때만
 git clone https://github.com/leebh3023/fr5_teleop.git ~/fr5_teleop
 cd ~/fr5_teleop
-git checkout v0.3.1                  # 이미지 태그 0.3.1과 맞춤
+git checkout v0.3.2                  # 이미지 태그 0.3.2와 맞춤
 ```
 
 - 저장소에 `Dockerfile`도 있지만 현장에서는 쓰지 않는다. 이미지는 아래
@@ -78,33 +78,35 @@ git checkout v0.3.1                  # 이미지 태그 0.3.1과 맞춤
 - 현장에서 고친 `config.yaml`은 `git status`에 수정됨으로 보인다. 정상이다.
   `.env`, `certs/*.pem`, `recordings/`는 git이 무시한다.
 
-#### 방법 B: 파일 4개만 복사
+#### 방법 B: 파일만 복사 (4개, 카메라를 쓰면 6개)
 
 git이 없거나 저장소 전체를 두고 싶지 않을 때 쓴다. 디렉터리 구조만 같으면 어떤
 방법으로 가져와도 된다.
 
 ```bash
-mkdir -p ~/fr5_teleop/scripts
+mkdir -p ~/fr5_teleop/scripts/realsense
 cd ~/fr5_teleop
 ```
 
 **B-1. GitHub에서 직접 받기 (현장 PC에 인터넷이 있을 때)**
 
 ```bash
-V=v0.3.1
-for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh; do
+V=v0.3.2
+for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh \
+         scripts/install_realsense_udev.sh scripts/realsense/99-realsense-libusb.rules; do
     curl -fsSL -o "$f" "https://raw.githubusercontent.com/leebh3023/fr5_teleop/$V/$f"
 done
 ```
 
 **B-2. 개발 PC에서 복사 (scp 또는 USB)**
 
-개발 PC의 저장소에서 같은 버전(`git checkout v0.3.1`)으로 맞춘 뒤 복사한다.
+개발 PC의 저장소에서 같은 버전(`git checkout v0.3.2`)으로 맞춘 뒤 복사한다.
 
 ```bash
 # 개발 PC에서 실행
 scp compose.yaml config.yaml config_bimanual.yaml user@<현장PC>:~/fr5_teleop/
-scp scripts/make_cert.sh user@<현장PC>:~/fr5_teleop/scripts/
+scp scripts/make_cert.sh scripts/install_realsense_udev.sh user@<현장PC>:~/fr5_teleop/scripts/
+scp scripts/realsense/99-realsense-libusb.rules user@<현장PC>:~/fr5_teleop/scripts/realsense/
 ```
 
 USB로 옮길 때도 `make_cert.sh`는 `scripts/` 아래에 둔다. 브라우저 다운로드나
@@ -138,7 +140,7 @@ USB 복사로 실행 권한이 빠질 수 있으므로 항상 `bash scripts/make
 3. 이미지 버전을 고정하고 받는다.
 
    ```bash
-   echo "TELEOP_TAG=0.3.1" > .env
+   echo "TELEOP_TAG=0.3.2" > .env
    docker compose pull
    ```
 4. 현장 로봇에 맞게 `config.yaml`을 고친다(`robot.ip`, `motion.workspace`,
@@ -162,8 +164,9 @@ USB 복사로 실행 권한이 빠질 수 있으므로 항상 `bash scripts/make
 ├── compose.yaml
 ├── config.yaml            # 현장에서 수정
 ├── config_bimanual.yaml   # 현장에서 수정
-├── .env                   # TELEOP_TAG=0.3.1
+├── .env                   # TELEOP_TAG=0.3.2
 ├── scripts/make_cert.sh
+├── scripts/install_realsense_udev.sh, realsense/99-realsense-libusb.rules   # 카메라용
 ├── certs/cert.pem, key.pem
 └── recordings/            # 녹화 결과 (호스트에 남음)
 ```
@@ -210,7 +213,8 @@ cd ~/fr5_teleop
 cp config.yaml config.yaml.bak
 cp config_bimanual.yaml config_bimanual.yaml.bak
 V=v0.4.0
-for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh; do
+for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh \
+         scripts/install_realsense_udev.sh scripts/realsense/99-realsense-libusb.rules; do
     curl -fsSL -o "$f" "https://raw.githubusercontent.com/leebh3023/fr5_teleop/$V/$f"
 done
 diff config.yaml.bak config.yaml       # 현장 수정값을 새 파일에 다시 반영
@@ -219,8 +223,8 @@ docker compose pull
 ```
 
 `.env`의 `TELEOP_TAG`를 생략하면 `latest`를 쓴다. 현장에서는 검증한 버전을
-고정한다. 문제가 생기면 이전 태그(`git checkout v0.3.0`이나 이전 파일, 그리고
-`TELEOP_TAG=0.3.0`)로 되돌린다.
+고정한다. 문제가 생기면 이전 태그(`git checkout v0.3.1`이나 이전 파일, 그리고
+`TELEOP_TAG=0.3.1`)로 되돌린다.
 
 ### 개발 PC에서 빌드와 검증
 
@@ -231,11 +235,47 @@ docker compose run --rm teleop      # dry-run 실행
 ```
 
 릴리스: `teleop/__init__.py`의 `__version__`을 올리고 같은 이름의 태그
-(`v0.3.1`)를 push한다.
+(`v0.3.2`)를 push한다.
 
-손목 카메라(RealSense)를 컨테이너에서 쓰는 설정은 아직 포함하지 않았다.
-카메라 의존성은 이미지에 들어 있지만 USB 장치 전달과 호스트 udev 규칙은 다음
-단계에서 추가한다.
+### 손목 카메라 (RealSense D435i) in Docker
+
+이미지에는 `pyrealsense2`, `av`, `numpy`, `libusb`가 들어 있다. `pyrealsense2`
+wheel은 V4L2 백엔드를 쓰므로 컨테이너가 호스트의 `/dev/videoN`을 직접 연다.
+`compose.yaml`의 관련 설정:
+
+- `/dev:/dev` 마운트: 카메라를 다시 꽂으면 `/dev/videoN` 번호가 바뀌므로 호스트
+  `/dev` 전체를 보이게 한다. 접근은 `device_cgroup_rules`로 V4L2(81)와
+  USB(189) 문자 장치만 허용한다.
+- `/run/udev` 읽기 전용 마운트: librealsense가 udev 장치 정보와 hotplug를 쓴다.
+- `group_add: [video, plugdev]`: 컨테이너 사용자(UID 1000)에 장치 그룹을 준다.
+
+현장 PC 설정 순서:
+
+1. 호스트에 udev 규칙을 설치하고 카메라를 다시 꽂는다(최초 1회).
+
+   ```bash
+   sudo bash scripts/install_realsense_udev.sh
+   lsusb -d 8086:0b3a        # D435i가 USB 3.x 포트에 연결되어 있는지
+   ls -l /dev/video*         # RealSense 노드가 crw-rw-rw- 인지
+   ```
+
+2. 컨테이너 안에서 카메라가 보이는지 확인한다.
+
+   ```bash
+   docker compose run --rm --entrypoint python teleop -c \
+     "import pyrealsense2 as rs; print([d.get_info(rs.camera_info.name) + ' ' + d.get_info(rs.camera_info.serial_number) for d in rs.context().query_devices()])"
+   ```
+
+   `['Intel RealSense D435I <serial>']`처럼 나와야 한다. 빈 목록이면 1번을 다시
+   확인한다.
+
+3. `config.yaml`에서 `recording.camera.enabled: true`로 바꾸고 다시 실행한다.
+   `/monitor`의 Camera가 `wrist 30.0 fps`(초록)로 보이면 녹화할 수 있다.
+   에피소드 폴더에 `camera_wrist.mp4`, `camera_wrist_frames.bin`이 생긴다.
+
+카메라가 켜져 있는데 스트리밍 중이 아니면 녹화 시작이 거부되고, Camera
+process가 2초마다 재연결을 시도한다. 로봇 teleop 자체는 카메라와 무관하게
+동작한다.
 
 ## Architecture
 
@@ -427,8 +467,8 @@ timestamp는 worker와 recorder가 공유하는 `CLOCK_MONOTONIC` ns다.
 ```bash
 # setup.sh가 함께 설치한다. 수동 설치 시:
 .venv-linux/bin/python -m pip install -r requirements-camera.txt
-# 비root 접근에는 librealsense udev 규칙이 필요하다 (librealsense 저장소의
-# config/99-realsense-libusb.rules를 /etc/udev/rules.d/에 복사 후 재연결).
+# 비root 접근에는 librealsense udev 규칙이 필요하다:
+# sudo bash scripts/install_realsense_udev.sh 후 카메라 재연결
 ```
 
 ```yaml
