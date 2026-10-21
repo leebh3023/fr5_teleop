@@ -36,7 +36,14 @@ class WorkerCounters:
     servo_start_count: int = 0
     servo_cart_count: int = 0
     servo_end_count: int = 0
+    # Deadline misses on ticks that began with the servo streaming: real gaps
+    # in the ServoCart command stream.
     missed_ticks: int = 0
+    # Overruns on ticks that began with the servo stopped, i.e. blocking SDK
+    # calls such as move_gripper or servo_start. MoveGripper is only sent
+    # after ServoMoveEnd (the controller rejects it during ServoCart), so
+    # these do not interrupt any command stream.
+    idle_overrun_ticks: int = 0
     gripper_command_count: int = 0
     gripper_complete_count: int = 0
 

@@ -414,12 +414,24 @@ pose는 최신 snapshot만 유지하지만 grip press/release 전환은 별도�
 ## Trigger/gripper behavior
 
 그리퍼는 기본 비활성이다. controller-side gripper 설정과 수동 저위험
-검증을 마친 뒤 `gripper.enabled: true`로 켠다. ACTIVE 상태에서
-trigger rising edge가 들어오면 worker는 먼저 `ServoMoveEnd()`로
-Cartesian servo를 종료하고 non-blocking `MoveGripper`를 보낸다.
-고정 sleep 대신 `GetGripperMotionDone()`을 polling하며, 완료 후에는
-자동으로 servo를 재시작하지 않는다. 작업자는 완료 후 grip을 완전히
-놓았다 다시 눌러야 한다.
+검증을 마친 뒤 `gripper.enabled: true`로 켠다.
+
+**Cartesian servo가 도는 동안 `MoveGripper`를 보내면 컨트롤 박스가 에러를
+반환한다.** 그래서 trigger는 servo가 멈춘 상태, 즉 `IDLE`이거나 grip을 놓은
+`SLEEPING`이고 grip을 놓고 있을 때만 받는다. grip을 잡고 추종 중(`ACTIVE`)일
+때의 trigger는 무시하고 `trigger ignored` 로그를 남긴다. 이 제약 때문에
+그리퍼 호출을 servo와 동시에 돌리는 방식(별도 스레드 등)은 쓰지 않는다.
+
+trigger를 받으면 worker는 안전장치로 servo 종료(`ServoMoveEnd()`)를 확인한 뒤
+`MoveGripper`를 보내고, 고정 sleep 대신 `GetGripperMotionDone()`을 polling한다.
+완료 후 servo를 자동으로 재시작하지 않으며, 작업자가 grip을 다시 누르면 현재
+위치를 원점으로 servo를 재개한다.
+
+`MoveGripper` 호출은 보통 약 15 ms지만 현장에서 가끔 1.5~1.8초 걸렸다
+(2026-10-21). 그동안 worker loop는 멈추지만 servo가 이미 꺼져 있어 명령
+스트림이 끊기는 것은 아니다. 이런 tick 지연은 `idle_overrun_ticks`로 따로
+세고, `missed_ticks`는 servo가 도는 중에 생긴 누락만 센다(`/monitor`의
+`Tick / missed` 항목에 `(idle N)`으로 함께 표시).
 
 grip과 trigger transition은 모두 latest-pose mailbox와 별도의 비손실
 control pipe로 전달된다. WebXR UI에는 `GRIPPER_ACTION`, 그리퍼 목표

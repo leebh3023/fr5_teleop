@@ -100,7 +100,7 @@ class WorkerDiagnostics:
             "servo_started=%s rearm_required=%s pose_seq=%s "
             "input_age_ms=%s sdk_operation=%s sdk_call_ms=%.3f "
             "start_count=%d cart_count=%d end_count=%d missed_ticks=%d "
-            "gripper_commands=%d gripper_completes=%d "
+            "idle_overrun_ticks=%d gripper_commands=%d gripper_completes=%d "
             "gripper_position=%s fault=%s",
             self.generation,
             status.state.value,
@@ -119,6 +119,7 @@ class WorkerDiagnostics:
             status.counters.servo_cart_count,
             status.counters.servo_end_count,
             status.counters.missed_ticks,
+            status.counters.idle_overrun_ticks,
             status.counters.gripper_command_count,
             status.counters.gripper_complete_count,
             status.gripper_position,
