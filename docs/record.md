@@ -219,7 +219,10 @@ raw episode는 손실 없는 원본이다. 학습에 쓸 LeRobotDataset v3는 �
   정의)를 다음 중 하나로 바꾼다. 같은 정의인지는 테스트로 확인한다.
   - `rot6d`: 회전 행렬의 앞 두 열, 연속적이어서 학습에 유리
   - `quat`: xyzw, 에피소드 안에서 부호 연속
-  - `euler`: rad
+  - `euler`: rad. controller는 rx,ry,rz를 (−180°, 180°]로 보고하므로 rx가 180°
+    근처일 때 값이 360°씩 튄다(현장 데이터에서 에피소드당 10회 이상). 그래서
+    state는 시간축으로 unwrap하고, action은 같은 frame의 state에서 ±π 안에
+    오도록 맞춘다. rot6d와 quat은 이 처리가 필요 없다.
 - **그리퍼:** 세션 메타데이터의 open/closed 값으로 0~1로 정규화한다.
 - **action 모드:** `--action-mode next_state`를 주면 action을 "다음 frame의
   state"로 정의한다.
@@ -534,8 +537,8 @@ little-endian, padding 없음, 레코드당 329 byte. 정의는
 | `joint_vel_deg_s` | float64 × 6 | 관절속도 (deg/s) |
 | `tcp` | float64 × 6 | 실제 TCP `[x,y,z,rx,ry,rz]` (mm, deg) |
 | `gripper_position` | float64 | 그리퍼 실제 위치 (0~100) |
-| `robot_frame_cnt` | int32 | CNDE 패킷 카운터 (0~255 순환, 없으면 -1) |
-| `robot_time_ms` | int64 | controller 시계, 자정부터의 ms (없으면 -1) |
+| `robot_frame_cnt` | int32 | CNDE 패킷 카운터 (없으면 -1). **현장 FR5(SDK 2.2.8)에서는 항상 0**으로, CNDE가 이 필드를 채우지 않는다. 상태 갱신 여부는 `robot_time_ms`로 판단한다 |
+| `robot_time_ms` | int64 | controller 시계, 자정부터의 ms (없으면 -1). 현장 데이터에서 host 시계와 같은 속도로 증가함을 확인 |
 
 ### 3.4 카메라 프레임 timestamp (`camera_<name>_frames.bin`)
 
@@ -607,7 +610,9 @@ little-endian, padding 없음, 레코드당 329 byte. 정의는
 | 항목 | 결과 |
 |---|---|
 | R4 변환 (lerobot 0.4.4 env) | 서버로 녹화한 clutch 에피소드(대기 1초 → 시연 2초 → grip 놓음 1초 → 시연 2초 → 대기 1초, fake 카메라 640×480): 앞뒤 1.58초를 잘라 168 frame. 움직임·유지 구간 경계가 기록 패턴과 일치하고, 유지 구간의 action은 state와 정확히 같음. 로봇 샘플 stale 0, 카메라 정렬 오차 p99 2.4 ms. `LeRobotDataset`으로 다시 로드해 state·action·task·30 Hz timestamp·action chunk(`delta_timestamps`)를 확인했고, 영상은 원본과 평균 0.3~0.7/255 차이(AV1 재인코딩) |
-| 자동 테스트 | 137개 통과 (`LEROBOT_PYTHON` 지정 시 lerobot 실변환 포함, 미지정 시 1개 skip). 그 외 이전 단계 결과: 124개 통과 (3회 반복, 기존 98개 포함). JS 테스트는 의도적으로 넣은 회귀(long-press 900 ms)를 잡아내는 것을 확인함 |
+| **현장 FR5 데이터** (2026-10-20, Docker v0.3.0, SDK 2.2.8, 카메라·그리퍼 없음, 3 에피소드) | raw 샘플: tick 누락 0, 간격 p99 9.1~10.4 ms(max 17.6 ms), `state_valid` 100%, `robot_time_ms`가 host 시계와 같은 속도(29.48 s vs 29.49 s). 측정 TCP는 명령을 72~88 ms(9~11 tick) 늦게 따라가며 이후 오차 0.3~0.7 mm. rx가 ±180°를 넘나든 횟수 13·10회 |
+| 현장 데이터 R4 변환 | success 2개 → 1416 frame(27.9 s + 19.2 s, 앞뒤 대기 1.6 s·11.9 s 제거), failure 1개 기본 제외. scipy로 따로 재구성한 값과 state·action·관절·timestamp 최대 오차 3e-8(float32 정밀도). rx 순환에도 rot6d frame 간 최대 변화 0.011. action과 state 위치 차이 평균 4.6~6.0 mm(약 80 ms 추종 지연). 50-step action chunk 로드 확인. raw 파일은 변환 전후 md5 동일 |
+| 자동 테스트 | 138개 통과 (`LEROBOT_PYTHON` 지정 시 lerobot 실변환 포함, 미지정 시 1개 skip). 그 외 이전 단계 결과: 124개 통과 (3회 반복, 기존 98개 포함). JS 테스트는 의도적으로 넣은 회귀(long-press 900 ms)를 잡아내는 것을 확인함 |
 | 실제 페이지 로드 (headless Chrome, dry-run 서버) | `/`와 `/monitor` 모두 JS 오류 없음, 녹화 상태와 다음 task 표시 |
 | 로봇 데이터 10.5초 | 1314 샘플, tick 누락 0, 간격 p50 8.00 / p99 8.24 ms |
 | fake 카메라 640×480 + depth 10.5초 | 315 프레임, frame_number 누락 0, 간격 p99 33.67 ms |
@@ -622,9 +627,9 @@ little-endian, padding 없음, 레코드당 329 byte. 정의는
 
 ## 6. 실제 장비에서 확인할 것 / 알려진 제한
 
-1. **CNDE 상태 갱신:** 실제 FR5에서 `robot_frame_cnt`가 증가하고 `tcp`가
-   움직임을 따라가는지 확인한다. SDK는 필드를 하나씩 갱신하므로 관절과 TCP가
-   서로 인접한 패킷(8 ms 차이)에서 왔을 수 있다.
+1. **CNDE 상태 갱신:** 현장 데이터로 확인했다(5장). `robot_frame_cnt`는 항상
+   0이므로 쓰지 않고 `robot_time_ms`로 판단한다. SDK는 필드를 하나씩 갱신하므로
+   관절과 TCP가 서로 인접한 패킷(8 ms 차이)에서 왔을 수 있다.
 2. **D435i 실측:**
    - udev 규칙을 설치했는지, USB 3로 연결됐는지 확인한다.
    - 실제 30 fps가 나오는지, `frame_number` 누락이 없는지 본다.
@@ -650,6 +655,10 @@ little-endian, padding 없음, 레코드당 329 byte. 정의는
 
 ## 7. 다음 단계
 
+- **데이터셋 구성 주의:** 현장 녹화는 robot IP 192.168.57.3(에피소드 0)과
+  192.168.57.2(에피소드 1·2)로 서로 다른 로봇에서 나왔다. 변환기는 로봇을
+  구분하지 않으므로, 로봇이나 작업대 배치가 다르면 raw 폴더를 나눠서 변환한다.
+  그리퍼가 꺼진 상태로 녹화하면 `gripper` 차원은 항상 0이다.
 - **학습 확인:** 실제 FR5 + D435i로 녹화한 데이터를 변환해 ACT나 Diffusion
   Policy를 짧게 학습시켜 본다. 이를 통해 다음을 정한다.
   - action 표현(`command` 또는 `next_state`)

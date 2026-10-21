@@ -297,11 +297,11 @@ def plan_episode(
     robot_age = grid - robot_t[robot_index]
     report: dict[str, Any] = {
         "frames": count,
-        "duration_s": round((grid[-1] - grid[0]) / 1e9, 3),
+        "duration_s": round(float(grid[-1] - grid[0]) / 1e9, 3),
         "robot_stale_frames": int((robot_age > ROBOT_STALE_NS).sum()),
         "robot_age_ms_max": round(float(robot_age.max()) / 1e6, 2),
         "trimmed_s": round(
-            ((meta["stop_ns"] - meta["start_ns"]) - (grid[-1] - grid[0])) / 1e9, 3
+            float((meta["stop_ns"] - meta["start_ns"]) - (grid[-1] - grid[0])) / 1e9, 3
         ),
     }
 
@@ -357,17 +357,25 @@ def build_episode(
 
     rows = robot[plan.robot_index]
     tcp = rows["tcp"]
-    state = np.concatenate(
-        [pose_vector(tcp, options.rotation), gripper(rows["gripper_position"])],
-        axis=1,
-    )
+    state_pose = pose_vector(tcp, options.rotation)
+    if options.rotation == "euler":
+        # The controller reports rx,ry,rz in (-180, 180]; near rx = 180 deg
+        # they jump by 360 deg (seen in field data). Unwrap along time.
+        state_pose[:, 3:6] = np.unwrap(state_pose[:, 3:6], axis=0)
+    state = np.concatenate([state_pose, gripper(rows["gripper_position"])], axis=1)
     if options.action_mode == "command":
         # Hold the measured pose while the servo is not commanding motion
         # (idle, SLEEPING between clutches, gripper action).
         command = np.where(rows["cmd_valid"][:, None] == 1, rows["cmd_tcp"], tcp)
+        command_pose = pose_vector(command, options.rotation)
+        if options.rotation == "euler":
+            # Put each commanded angle within pi of the same frame's state.
+            delta = command_pose[:, 3:6] - state_pose[:, 3:6]
+            command_pose[:, 3:6] = (
+                state_pose[:, 3:6] + (delta + np.pi) % (2 * np.pi) - np.pi
+            )
         action = np.concatenate(
-            [pose_vector(command, options.rotation), gripper(rows["gripper_target"])],
-            axis=1,
+            [command_pose, gripper(rows["gripper_target"])], axis=1
         )
     else:
         action = np.concatenate([state[1:], state[-1:]], axis=0)

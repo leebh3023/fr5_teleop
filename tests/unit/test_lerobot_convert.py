@@ -354,3 +354,25 @@ print("RESULT" + json.dumps({{
     }
     report = json.loads((out / "fr5_conversion.json").read_text())
     assert report["skipped"] == {"episode_000001": "outcome is failure"}
+
+
+def test_euler_output_is_unwrapped_across_180(tmp_path: Path) -> None:
+    # rx oscillates around 180 deg as reported by the controller: +179.5,
+    # -179.5, ... (field episodes had 10+ such jumps).
+    episode = write_episode(tmp_path, 0, samples=125)
+    path = episode / "robot_right.bin"
+    from teleop.recording.schema import ROBOT_LAYOUT
+
+    records = np.frombuffer(path.read_bytes(), dtype=np.dtype(ROBOT_LAYOUT.numpy_dtype_descr())).copy()
+    rx = np.where(np.arange(125) % 20 < 10, 179.5, -179.5)
+    records["tcp"][:, 3] = rx
+    records["cmd_tcp"][:, 3] = -rx  # command on the other side of the wrap
+    path.write_bytes(records.tobytes())
+
+    euler = build_episode(episode, ConvertOptions(trim_idle=False, rotation="euler"))
+    state_rx = euler.state[:, 3]
+    assert np.abs(np.diff(state_rx)).max() < math.radians(2)
+    assert np.abs(euler.action[:, 3] - state_rx).max() < math.radians(2)
+    # rot6d is continuous without any unwrapping.
+    rot6d = build_episode(episode, ConvertOptions(trim_idle=False))
+    assert np.abs(np.diff(rot6d.state[:, 3:9], axis=0)).max() < 0.05
