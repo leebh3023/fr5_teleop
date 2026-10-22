@@ -31,7 +31,7 @@ git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에
 
 **config와 이미지는 같은 버전을 쓴다.** config는 알 수 없는 키를 거부하므로,
 새 버전의 `config.yaml`을 옛 이미지로 실행하면 시작 단계에서 실패할 수 있다.
-아래 예시는 모두 `v0.3.2`(이미지 태그 `0.3.2`) 기준이다.
+아래 예시는 모두 `v0.3.3`(이미지 태그 `0.3.3`) 기준이다.
 
 #### 공통 준비 (최초 1회)
 
@@ -70,7 +70,7 @@ git과 인터넷이 있으면 방법 A가 가장 간단하다. 이미지 pull에
 sudo apt-get install -y git          # git이 없을 때만
 git clone https://github.com/leebh3023/fr5_teleop.git ~/fr5_teleop
 cd ~/fr5_teleop
-git checkout v0.3.2                  # 이미지 태그 0.3.2와 맞춤
+git checkout v0.3.3                  # 이미지 태그 0.3.3과 맞춤
 ```
 
 - 저장소에 `Dockerfile`도 있지만 현장에서는 쓰지 않는다. 이미지는 아래
@@ -91,7 +91,7 @@ cd ~/fr5_teleop
 **B-1. GitHub에서 직접 받기 (현장 PC에 인터넷이 있을 때)**
 
 ```bash
-V=v0.3.2
+V=v0.3.3
 for f in compose.yaml config.yaml config_bimanual.yaml scripts/make_cert.sh \
          scripts/install_realsense_udev.sh scripts/realsense/99-realsense-libusb.rules; do
     curl -fsSL -o "$f" "https://raw.githubusercontent.com/leebh3023/fr5_teleop/$V/$f"
@@ -100,7 +100,7 @@ done
 
 **B-2. 개발 PC에서 복사 (scp 또는 USB)**
 
-개발 PC의 저장소에서 같은 버전(`git checkout v0.3.2`)으로 맞춘 뒤 복사한다.
+개발 PC의 저장소에서 같은 버전(`git checkout v0.3.3`)으로 맞춘 뒤 복사한다.
 
 ```bash
 # 개발 PC에서 실행
@@ -140,7 +140,7 @@ USB 복사로 실행 권한이 빠질 수 있으므로 항상 `bash scripts/make
 3. 이미지 버전을 고정하고 받는다.
 
    ```bash
-   echo "TELEOP_TAG=0.3.2" > .env
+   echo "TELEOP_TAG=0.3.3" > .env
    docker compose pull
    ```
 4. 현장 로봇에 맞게 `config.yaml`을 고친다(`robot.ip`, `motion.workspace`,
@@ -164,7 +164,7 @@ USB 복사로 실행 권한이 빠질 수 있으므로 항상 `bash scripts/make
 ├── compose.yaml
 ├── config.yaml            # 현장에서 수정
 ├── config_bimanual.yaml   # 현장에서 수정
-├── .env                   # TELEOP_TAG=0.3.2
+├── .env                   # TELEOP_TAG=0.3.3
 ├── scripts/make_cert.sh
 ├── scripts/install_realsense_udev.sh, realsense/99-realsense-libusb.rules   # 카메라용
 ├── certs/cert.pem, key.pem
@@ -223,8 +223,8 @@ docker compose pull
 ```
 
 `.env`의 `TELEOP_TAG`를 생략하면 `latest`를 쓴다. 현장에서는 검증한 버전을
-고정한다. 문제가 생기면 이전 태그(`git checkout v0.3.1`이나 이전 파일, 그리고
-`TELEOP_TAG=0.3.1`)로 되돌린다.
+고정한다. 문제가 생기면 이전 태그(`git checkout v0.3.2`나 이전 파일, 그리고
+`TELEOP_TAG=0.3.2`)로 되돌린다.
 
 ### 개발 PC에서 빌드와 검증
 
@@ -235,7 +235,7 @@ docker compose run --rm teleop      # dry-run 실행
 ```
 
 릴리스: `teleop/__init__.py`의 `__version__`을 올리고 같은 이름의 태그
-(`v0.3.2`)를 push한다.
+(`v0.3.3`)를 push한다.
 
 ### 손목 카메라 (RealSense D435i) in Docker
 
@@ -515,7 +515,7 @@ camera_wrist_frames.bin   프레임별 arrival_mono_ns(로봇 t_ns와 같은 시
 raw episode는 `lerobot` 환경에서 LeRobotDataset v3(30 Hz)로 변환한다.
 
 ```bash
-~/miniforge3/envs/lerobot/bin/python -m teleop.recording.lerobot_convert \
+~/miniforge3/envs/lerobot-cu128/bin/python -m teleop.recording.lerobot_convert \
     --raw recordings --out datasets/fr5_pick_cube --repo-id local/fr5_pick_cube
 ```
 

@@ -1,3 +1,3 @@
 """VR teleoperation bridge for Fairino FR5."""
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"

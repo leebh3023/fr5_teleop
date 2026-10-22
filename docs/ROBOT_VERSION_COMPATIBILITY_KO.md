@@ -25,7 +25,9 @@ Docker 이미지에는 이 SDK의 `Robot.py`가 같은 상대 경로로 들어 �
 - 연결 시 `ServoCart` signature를 검사한다. SDK 2.2.8은 `exaxis` 파라미터가
   있으므로 `exaxis=robot.exaxis_default`를 함께 보내고 `acc=0`, `vel=0`을 쓴다.
 - 연결되면 `GetSDKVersion` 결과를 `Fairino connection ready: ip=... versions=...`
-  로그로 남긴다. 실제로 로드된 SDK 버전은 이 로그로 확인한다.
+  로그로 남긴다. 단, Fairino SDK는 이 값을 한 단계 전 버전으로 고정해 반환한다
+  (SDK 2.2.8 → `['SDK:V2.2.7', 'Robot:V3.9.7']`). 이 로그로 실제 SDK나 펌웨어
+  버전을 판단하지 않는다. 펌웨어 버전은 컨트롤러 화면에서 확인한다.
 - `Mode(0)`과 `SetSpeed`는 code 14(이미 해당 모드, 스위치 잠김)를 허용한다.
 - `RobotEnable` 리셋(`reset_fault`)은 grip마다 하지 않고, 실제 fault가 있거나
   rearm이 필요할 때만 호출한다(`worker.py`의 `_arm_servo`). 매번 호출하면
@@ -54,4 +56,4 @@ motion:
 2. `workspace`가 로봇의 현재 TCP 위치를 포함하는지 확인한다.
 3. 실행: `python -m teleop --config config.yaml --confirm-hardware`
    (Docker: `docker compose run --rm teleop --confirm-hardware`)
-4. 시작 로그 `Fairino connection ready ... versions=`에 SDK 2.2.8이 나오는지 확인한다.
+4. 시작 로그에 `Fairino connection ready: ip=<대상 IP>`가 오류 없이 나오는지 확인한다.

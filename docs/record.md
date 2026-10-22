@@ -388,7 +388,7 @@ recording:
 
 ```bash
 cd fr5_teleop
-~/miniforge3/envs/lerobot/bin/python -m teleop.recording.lerobot_convert \
+~/miniforge3/envs/lerobot-cu128/bin/python -m teleop.recording.lerobot_convert \
     --raw recordings --out datasets/fr5_pick_cube --repo-id local/fr5_pick_cube
 ```
 
